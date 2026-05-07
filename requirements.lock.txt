@@ -1,0 +1,51 @@
+# Pathology Dictation Assistant — locked dependencies
+# Generated from: venv/Scripts/pip freeze
+# Python 3.11.4 (64-bit, Windows)
+# Build date: 2026-05-07
+
+annotated-types==0.7.0
+anyio==4.13.0
+av==12.3.0
+certifi==2026.4.22
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.3.3
+colorama==0.4.6
+ctranslate2==4.7.1
+defusedxml==0.7.1
+faster-whisper==1.0.2
+filelock==3.29.0
+flatbuffers==25.12.19
+fsspec==2026.4.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==1.14.0
+idna==3.13
+keyboard==0.13.5
+loguru==0.7.2
+lxml==6.1.0
+markdown-it-py==4.1.0
+mdurl==0.1.2
+numpy==1.24.3
+onnxruntime==1.25.1
+packaging==26.2
+pillow==12.2.0
+protobuf==7.34.1
+pycparser==3.0
+pydantic==2.4.2
+pydantic_core==2.10.1
+pyperclip==1.8.2
+python-docx==1.2.0
+python-dotenv==1.0.0
+PyYAML==6.0.3
+requests==2.33.1
+rich==15.0.0
+scipy==1.11.1
+sounddevice==0.4.6
+soundfile==0.12.1
+tokenizers==0.23.1
+tqdm==4.67.3
+typing_extensions==4.15.0
+urllib3==2.6.3
+win32_setctime==1.2.0

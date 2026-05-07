@@ -1,0 +1,115 @@
+================================================================================
+PATHOLOGY DICTATION ASSISTANT - QUICK START GUIDE
+================================================================================
+
+FIRST TIME SETUP (5 minutes):
+
+1. Open PowerShell as Administrator
+
+2. Navigate to your project directory:
+   cd "C:\PathologyDictation"
+
+3. Run setup script:
+   .\setup_windows.bat
+
+4. Follow the prompts. That's it!
+
+
+RUNNING THE APP:
+
+Option A - Easy (double-click):
+   • Double-click: run.bat
+
+Option B - PowerShell:
+   • .\venv\Scripts\Activate.ps1
+   • python pathology_dictation_app.py
+
+Option C - Direct:
+   • Just type: python pathology_dictation_app.py
+
+
+USING THE APP:
+
+Step 1: Wait for startup message
+   "🚀 Ready! Press F9 to start recording..."
+
+Step 2: Press F9
+   Console shows: "🎤 Recording... (Press F9 to stop)"
+
+Step 3: Speak clearly
+   • Normal pace, clear pronunciation
+   • Natural medical terms work best
+   • Pause between sentences
+
+Step 4: Press F9 again
+   • Recording stops
+   • Transcription begins
+   • Takes 5-30 seconds depending on length
+
+Step 5: Result appears
+   • Original transcription
+   • Corrected version
+   • Terminology replacements listed
+
+Step 6: Text is in clipboard
+   ✅ Automatically copied to clipboard
+   • Paste into LIS, Word, report system
+   • Ctrl+V to paste
+
+
+CUSTOMIZING:
+
+Hotkey (change from F9):
+   • Edit: config.py
+   • Change: toggle_record: str = "f9"
+
+Dictionary (add custom terms):
+   • Edit: data/pathology_dictionary.json
+   • Format: "what you say": "what you meant"
+
+Model (faster vs better):
+   • Edit: config.py
+   • model_size: "large-v3"     ← Best quality
+   • model_size: "medium"       ← Good balance
+   • model_size: "base"         ← Fast
+
+
+TROUBLESHOOTING:
+
+"No module named 'faster_whisper'"
+   → Run: pip install -r requirements.txt
+
+"nvidia-smi not found"
+   → Install CUDA: https://developer.nvidia.com/cuda-downloads
+
+"Microphone test failed"
+   → Check Windows Sound Settings
+   → Edit config.py, change device_index
+
+"Transcription is very slow"
+   → Run: nvidia-smi (check CUDA is being used)
+
+"Hotkey doesn't work"
+   → Run PowerShell as Administrator
+
+
+NEXT STEPS:
+
+1. Download all project files
+2. Create C:\PathologyDictation directory
+3. Copy files there
+4. Run setup_windows.bat
+5. Follow prompts - ready to use!
+
+
+SUPPORT:
+
+1. Check SETUP.md for detailed instructions
+2. View logs: data/pathology_dictation.log
+3. Test microphone at startup
+
+
+================================================================================
+Version 1.0.0 - Phase 1 MVP
+Ready to dictate? Press F9!
+================================================================================

@@ -1,0 +1,100 @@
+# =============================================================================
+# Pathology Dictation Assistant — .gitignore
+# PRIVACY-FIRST: never commit patient data, audio, models, or secrets
+# =============================================================================
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+
+# ── Whisper / AI model files (too large, never commit) ───────────────────────
+models/
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.gguf
+*.npz
+
+# ── Portable build output (7 GB — use releases instead) ──────────────────────
+PathDictate_Portable/
+*.zip
+*.tar.gz
+*.7z
+
+# ── Audio files (may contain patient dictations) ─────────────────────────────
+audio/
+*.wav
+*.mp3
+*.mp4
+*.m4a
+*.ogg
+*.flac
+*.aac
+*.wma
+
+# ── Log files (may contain PHI) ───────────────────────────────────────────────
+logs/
+data/*.log
+data/gui.log
+data/pathology_dictation.log
+*.log
+
+# ── Patient data and transcripts (NEVER commit) ───────────────────────────────
+patient_data/
+transcripts/
+reports/
+*.sqlite
+*.db
+*.docx
+*.pdf
+
+# ── Local config overrides and secrets ────────────────────────────────────────
+local_settings.yaml
+local_settings.json
+credentials/
+.env
+secrets.yaml
+*.secret
+
+# ── Windows binaries and DLLs (part of portable build, not source) ───────────
+*.exe
+*.dll
+ffmpeg/
+
+# ── OS / editor junk ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.suo
+*.user
+
+# ── Temp / cache ─────────────────────────────────────────────────────────────
+temp/
+tmp/
+cache/
+.cache/
+*.tmp
+
+# ── Checksums for portable build (generated, not source) ─────────────────────
+checksums/
+
+# ── Claude Code settings (local only) ────────────────────────────────────────
+.claude/

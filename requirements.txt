@@ -1,0 +1,31 @@
+# Pathology Dictation Assistant - Phase 1
+# Windows 11 + NVIDIA GPU (CUDA)
+
+# Core dependencies
+faster-whisper==1.0.2
+numpy==1.24.3
+scipy==1.11.1
+
+# Audio I/O
+sounddevice==0.4.6
+soundfile==0.12.1
+
+# Hotkey and system integration
+keyboard==0.13.5
+pyperclip==1.8.2
+
+# Configuration and utilities
+pydantic==2.4.2
+python-dotenv==1.0.0
+
+# Optional: For better logging
+loguru==0.7.2
+
+# Optional: For system tray integration (Phase 2)
+# pystray==0.19.4
+# Pillow==10.0.0
+
+# GPU acceleration (already available via CUDA, but verify with PyTorch if adding local LLM later)
+# torch==2.1.0+cu118  # Only if adding local LLM in Phase 2+
+# torchvision==0.16.0+cu118
+# torchaudio==2.1.0+cu118

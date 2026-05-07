@@ -1,0 +1,57 @@
+# Pathology Dictation Assistant — Portable Configuration
+# -------------------------------------------------------
+# This file is loaded automatically when PATHDICTATE_PORTABLE=1.
+# Paths beginning with "./" are relative to the portable root folder.
+# Edit this file to change model, hotkey, or audio settings.
+
+offline_only: true
+disable_telemetry: true
+
+# ── Model ──────────────────────────────────────────────────────────────────────
+# model_path: path to a local model directory (flat format).
+#   Use faster-whisper-base  for fastest CPU performance (~140 MB).
+#   Use faster-whisper-small for better accuracy (~244 MB, still CPU-friendly).
+#   Use faster-whisper-medium for high accuracy (~769 MB, slow on CPU).
+#   Use faster-whisper-large-v3 for best quality (~1.5 GB, GPU strongly recommended).
+model_path: ./models/faster-whisper-base
+
+# ── Device auto-detection ─────────────────────────────────────────────────────
+# device: auto | cuda | cpu
+#   auto = try CUDA first; fall back to CPU silently.
+device: auto
+
+# Compute type used when no GPU is found.
+cpu_compute_type: int8
+
+# Compute type used when CUDA is available.
+cuda_compute_type: float16
+
+# Explicit fallback if device detection fails entirely.
+fallback_device: cpu
+fallback_compute_type: int8
+
+# ── FFmpeg ─────────────────────────────────────────────────────────────────────
+ffmpeg_path: ./ffmpeg/bin/ffmpeg.exe
+
+# ── Transcription quality ──────────────────────────────────────────────────────
+language: en
+temperature: 0.0
+beam_size: 5
+best_of: 5
+
+# ── Hotkey ─────────────────────────────────────────────────────────────────────
+hotkey_toggle_record: f9
+
+# ── Audio input ────────────────────────────────────────────────────────────────
+sample_rate: 16000
+channels: 1
+# device_index: null   # null = system default microphone
+
+# ── Terminology correction ─────────────────────────────────────────────────────
+dictionary_file: ./config/pathology_replacements.json
+terminology_enabled: true
+case_sensitive: false
+
+# ── UI ─────────────────────────────────────────────────────────────────────────
+show_transcription_live: true
+auto_copy_to_clipboard: true

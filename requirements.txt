@@ -25,7 +25,10 @@ loguru==0.7.2
 # pystray==0.19.4
 # Pillow==10.0.0
 
-# GPU acceleration (already available via CUDA, but verify with PyTorch if adding local LLM later)
-# torch==2.1.0+cu118  # Only if adding local LLM in Phase 2+
-# torchvision==0.16.0+cu118
-# torchaudio==2.1.0+cu118
+# Optional: AI rewrite/cleanup feature (install separately, CPU-first)
+# Requires placing .gguf model files in  models/rewrite/
+# CPU install:
+#   pip install llama-cpp-python
+# GPU (CUDA 12.1) install:
+#   pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121
+# llama-cpp-python>=0.2.85

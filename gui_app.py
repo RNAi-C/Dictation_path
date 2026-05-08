@@ -26,6 +26,7 @@ from audio_recorder import AudioRecorder
 from transcriber import PathologyTranscriber
 from terminology_corrector import TerminologyCorrector
 from clipboard_handler import ClipboardHandler
+from rewriter import LocalRewriter, scan_models
 
 
 # ── Light palette ─────────────────────────────────────────────────────────────
@@ -588,6 +589,9 @@ class App(tk.Tk):
         _vc_path = Path(__file__).parent / "config" / "voice_commands.json"
         self._voice_cmd = VoiceCommandProcessor(config_path=_vc_path)
 
+        # AI rewriter (lazy-loaded when first used)
+        self._rewriter: Optional[LocalRewriter] = None
+
         self._style()
         self._build()
         self._populate_mics()
@@ -761,12 +765,18 @@ class App(tk.Tk):
         self._nb = ttk.Notebook(wrap)
         self._nb.grid(row=0, column=0, sticky="nsew")
 
+        # Live tab — readonly streaming preview
         self._live_box = self._textbox(self._nb)
-        self._orig_box = self._textbox(self._nb)
-        self._corr_box = self._textbox(self._nb)
         self._nb.add(self._live_box, text="  🎙  Live  ")
-        self._nb.add(self._orig_box, text="  📄  Original  ")
+
+        # Corrected tab — editable by user
+        self._corr_box = self._editable_textbox(self._nb)
         self._nb.add(self._corr_box, text="  ✏  Corrected  ")
+
+        # Rewritten tab — readonly AI output
+        self._rewr_box = self._textbox(self._nb)
+        self._nb.add(self._rewr_box, text="  ✨  Rewritten  ")
+
         self._nb.select(0)
 
         self._changes_lbl = tk.Label(
@@ -783,6 +793,18 @@ class App(tk.Tk):
             relief="flat", bd=0, padx=14, pady=12,
             selectbackground=ACCENT_L, selectforeground=TEXT,
             state="disabled"
+        )
+
+    def _editable_textbox(self, parent) -> scrolledtext.ScrolledText:
+        """Textbox that stays editable (state='normal') — user can type freely."""
+        return scrolledtext.ScrolledText(
+            parent, wrap="word",
+            font=("Segoe UI", self._font_size),
+            height=1,
+            bg="#F7FFFE", fg=TEXT, insertbackground=ACCENT,
+            relief="flat", bd=0, padx=14, pady=12,
+            selectbackground=ACCENT_L, selectforeground=TEXT,
+            state="normal"
         )
 
     # ── Bottom bar ────────────────────────────────────────────────────────────
@@ -810,6 +832,24 @@ class App(tk.Tk):
         btn(4,  "✕  Clear",           self._clear_all,        fg=TEXT_DIM, padx=10)
 
         # Thin vertical divider
+        tk.Frame(bar, bg=BORDER, width=1).grid(row=0, column=5,
+                                                padx=(8, 8), sticky="ns", pady=8)
+
+        # AI rewrite controls
+        tk.Label(bar, text="AI:", font=FONT_SMALL,
+                 bg=BG2, fg=TEXT_DIM)\
+            .grid(row=0, column=6, padx=(0, 4))
+        self._rewr_model_var = tk.StringVar()
+        self._rewr_model_cb  = ttk.Combobox(
+            bar, textvariable=self._rewr_model_var,
+            width=22, state="readonly")
+        self._rewr_model_cb.grid(row=0, column=7, padx=(0, 4), pady=6)
+        self._rewrite_btn = btn(8, "✨  Rewrite", self._rewrite, fg=ACCENT)
+
+        # Refresh model list button
+        btn(9, "↺", self._populate_rewrite_models, fg=TEXT_DIM, padx=6)
+
+        # Thin vertical divider (2nd)
         tk.Frame(bar, bg=BORDER, width=1).grid(row=0, column=11,
                                                 padx=(10, 8), sticky="ns", pady=8)
 
@@ -823,6 +863,9 @@ class App(tk.Tk):
                                    bg=BG2, fg=TEXT_MED, anchor="center")
         self._size_lbl.grid(row=0, column=14)
         btn(15, "A+", self._font_up, padx=10)
+
+        # Populate rewrite model list now that widgets exist
+        self._populate_rewrite_models()
 
         # Spacer
         tk.Frame(bar, bg=BG2).grid(row=0, column=98, sticky="ew")
@@ -939,13 +982,16 @@ class App(tk.Tk):
     def _apply_font(self):
         self._size_lbl.config(text=str(self._font_size))
         f = ("Segoe UI", self._font_size)
-        for box in (self._live_box, self._orig_box, self._corr_box):
+        for box in (self._live_box, self._corr_box, self._rewr_box):
             box.config(font=f)
 
     # ── Save ──────────────────────────────────────────────────────────────────
 
     def _current_text(self) -> str:
-        t = self._corr_box.get("1.0", "end").strip()
+        """Return best available text: rewritten > corrected > live."""
+        t = self._rewr_box.get("1.0", "end").strip()
+        if not t:
+            t = self._corr_box.get("1.0", "end").strip()
         if not t:
             t = self._live_box.get("1.0", "end").strip()
         return t
@@ -1197,9 +1243,8 @@ class App(tk.Tk):
                 elif op == "final":
                     _, raw, corrected, changes, vc_applied = m
                     self._write_box(self._live_box, corrected, TEXT)
-                    self._append_box(self._orig_box, raw,       TEXT)
-                    self._append_box(self._corr_box, corrected, TEXT)
-                    self._nb.select(2)
+                    self._append_box(self._corr_box, corrected, TEXT, stay_enabled=True)
+                    self._nb.select(1)   # Switch to Corrected tab
                     parts = []
                     if vc_applied:
                         parts.append("  Voice cmds: " +
@@ -1214,6 +1259,11 @@ class App(tk.Tk):
                     else:
                         self._changes_lbl.config(
                             text="  No voice commands or terminology corrections applied.")
+                elif op == "rewrite_done":
+                    self._append_box(self._rewr_box, m[1], TEXT)
+                    self._nb.select(2)   # Switch to Rewritten tab
+                elif op == "rewrite_btn_enable":
+                    self._rewrite_btn.config(state="normal")
                 elif op == "msgbox":
                     _, lvl, title, txt = m
                     (messagebox.showerror if lvl == "error"
@@ -1235,16 +1285,17 @@ class App(tk.Tk):
         box.see("end")
         box.config(state="disabled")
 
-    def _write_box(self, box, text: str, color=TEXT):
+    def _write_box(self, box, text: str, color=TEXT, stay_enabled=False):
         box.config(state="normal")
         box.delete("1.0", "end")
         if text:
             box.insert("end", text)
             box.tag_add("c", "1.0", "end")
             box.tag_config("c", foreground=color)
-        box.config(state="disabled")
+        if not stay_enabled:
+            box.config(state="disabled")
 
-    def _append_box(self, box, text: str, color=TEXT):
+    def _append_box(self, box, text: str, color=TEXT, stay_enabled=False):
         """Append text to box, adding a separator if content already exists."""
         box.config(state="normal")
         existing = box.get("1.0", "end").strip()
@@ -1259,7 +1310,8 @@ class App(tk.Tk):
             box.tag_add("new", start_idx, box.index("end"))
             box.tag_config("new", foreground=color)
         box.see("end")
-        box.config(state="disabled")
+        if not stay_enabled:
+            box.config(state="disabled")
 
     def _set_status(self, text: str, color=TEXT_DIM):
         self._stat_lbl.config(text=text, fg=color)
@@ -1278,18 +1330,107 @@ class App(tk.Tk):
             self._set_status("Nothing to copy yet.", RED_REC)
 
     def _clear_all(self):
-        for box in (self._live_box, self._orig_box, self._corr_box):
+        # Readonly boxes
+        for box in (self._live_box, self._rewr_box):
             self._write_box(box, "")
+        # Editable corrected box — stays enabled
+        self._corr_box.delete("1.0", "end")
         self._changes_lbl.config(text="")
         self._vu.reset()
         self._time_lbl.config(text="")
         self._live_text = ""
+
+    # ── AI rewrite ────────────────────────────────────────────────────────────
+
+    def _populate_rewrite_models(self):
+        """Scan models/rewrite/ for .gguf files and populate the combobox."""
+        try:
+            models = scan_models(self.cfg.models_dir)
+        except Exception:
+            models = []
+        if models:
+            names = [m.name for m in models]
+            self._rewr_model_cb.configure(values=names)
+            # Keep current selection if still valid, else pick first
+            if self._rewr_model_var.get() not in names:
+                self._rewr_model_var.set(names[0])
+            self._rewrite_btn.config(state="normal")
+        else:
+            self._rewr_model_cb.configure(values=["No models found"])
+            self._rewr_model_var.set("No models found")
+            self._rewrite_btn.config(state="disabled")
+
+    def _rewrite(self):
+        """Start AI rewrite of the Corrected text in a background thread."""
+        text = self._corr_box.get("1.0", "end").strip()
+        if not text:
+            messagebox.showwarning(
+                "Nothing to rewrite",
+                "Dictate and correct something first.",
+                parent=self)
+            return
+
+        model_name = self._rewr_model_var.get()
+        if not model_name or model_name == "No models found":
+            messagebox.showinfo(
+                "No rewrite model found",
+                "Place a .gguf model file in:\n"
+                f"  {self.cfg.models_dir / 'rewrite'}\n\n"
+                "Supported models (Q4_K_M GGUF format):\n"
+                "  • Qwen2.5-1.5B-Instruct-Q4_K_M.gguf  (~0.9 GB)\n"
+                "  • Qwen2.5-3B-Instruct-Q4_K_M.gguf    (~1.8 GB)\n"
+                "  • Phi-3.5-mini-instruct-Q4_K_M.gguf  (~2.2 GB)\n"
+                "  • Llama-3.2-1B-Instruct-Q4_K_M.gguf  (~0.7 GB)\n\n"
+                "Download from HuggingFace — see README.",
+                parent=self)
+            return
+
+        # Check llama-cpp-python is available before launching thread
+        avail, msg = LocalRewriter.check_available()
+        if not avail:
+            messagebox.showerror("llama-cpp-python not installed", msg, parent=self)
+            return
+
+        model_path = self.cfg.models_dir / "rewrite" / model_name
+        self._rewrite_btn.config(state="disabled")
+        self._set_status(
+            f"Loading  {model_name}…  (first run may take 10–30 s)", AMBER)
+        threading.Thread(
+            target=self._rewrite_bg, args=(text, model_path), daemon=True
+        ).start()
+
+    def _rewrite_bg(self, text: str, model_path: Path):
+        """Background worker: load GGUF model if needed, then rewrite."""
+        try:
+            # Load or swap model (unload old if different)
+            if self._rewriter is None or self._rewriter.model_path != model_path:
+                if self._rewriter and self._rewriter.is_loaded():
+                    self._rewriter.unload()
+                self._rewriter = LocalRewriter(model_path)
+                self._rewriter.load()
+
+            self._ui_q.put(("status", "Rewriting text…", AMBER))
+            result = self._rewriter.rewrite(text)
+            self._ui_q.put(("rewrite_done", result))
+            self._ui_q.put(("status",
+                             "Rewrite complete  ·  see  ✨ Rewritten  tab", GREEN_OK))
+        except Exception as e:
+            logger.error(f"rewrite_bg: {e}", exc_info=True)
+            self._ui_q.put(("status", f"Rewrite error: {e}", RED_REC))
+            self._ui_q.put(("msgbox", "error", "Rewrite failed", str(e)))
+        finally:
+            self._ui_q.put(("rewrite_btn_enable", True))
 
     def _on_close(self):
         self.is_recording = False
         if self._recorder and self._recorder.is_recording:
             try:
                 self._recorder.stop_recording()
+            except Exception:
+                pass
+        if self._rewriter and self._rewriter.is_loaded():
+            try:
+                self._rewriter.unload()
             except Exception:
                 pass
         self.destroy()

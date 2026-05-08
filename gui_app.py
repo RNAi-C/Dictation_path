@@ -564,7 +564,7 @@ class App(tk.Tk):
         self.minsize(720, 580)
         self.geometry("900x720")
 
-        _icon = Path(__file__).parent / "app_icon (2).ico"
+        _icon = Path(__file__).parent / "app_icon.ico"
         if _icon.exists():
             try:
                 self.iconbitmap(str(_icon))

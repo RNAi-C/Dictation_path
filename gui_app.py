@@ -56,6 +56,8 @@ TEXT_MED   = "#3D3F58"   # secondary text
 TEXT_DIM   = "#6B6D88"   # dimmed / placeholder
 TEXT_LIVE  = "#1A5FB4"   # live transcription colour (same as accent)
 
+APP_VERSION = "0.2"
+
 FONT_UI    = ("Segoe UI", 11)
 FONT_BIG   = ("Segoe UI", 14, "bold")
 FONT_HEAD  = ("Segoe UI", 16, "bold")
@@ -682,7 +684,7 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("Pathology Dictation Assistant")
+        self.title(f"Pathology Dictation Assistant  v{APP_VERSION}")
         self.configure(bg=BG)
         self.minsize(720, 580)
         self.geometry("900x720")
@@ -769,9 +771,410 @@ class App(tk.Tk):
                      relief="flat")
         s.map("TScrollbar", background=[("active", BORDER)])
 
+    # ── Menubar ───────────────────────────────────────────────────────────────
+
+    def _build_menubar(self):
+        """Build the application menubar (File / Edit / Rewrite / Tools / Settings / Help)."""
+        def _m(parent):
+            return tk.Menu(parent, tearoff=0, bg=BG2, fg=TEXT,
+                           activebackground=ACCENT_L, activeforeground=TEXT,
+                           relief="solid", bd=1, font=FONT_SMALL)
+
+        mb = tk.Menu(self, bg=BG2, fg=TEXT,
+                     activebackground=ACCENT, activeforeground="white",
+                     relief="flat", bd=0, font=FONT_UI)
+
+        # ── File ──────────────────────────────────────────────────────────────
+        fm = _m(mb)
+        fm.add_command(label="  💾  Save as .txt",   command=self._save_txt,
+                       accelerator="Ctrl+S")
+        fm.add_command(label="  📄  Save as .docx",  command=self._save_docx)
+        fm.add_separator()
+        fm.add_command(label="  ⏻   Exit",            command=self._on_close)
+        mb.add_cascade(label="File", menu=fm)
+
+        # ── Edit ──────────────────────────────────────────────────────────────
+        em = _m(mb)
+        em.add_command(label="  Undo",              command=self._undo,
+                       accelerator="Ctrl+Z")
+        em.add_command(label="  Redo",              command=self._redo,
+                       accelerator="Ctrl+Y")
+        em.add_separator()
+        em.add_command(label="  📋  Copy to Clipboard", command=self._copy_result)
+        em.add_separator()
+        em.add_command(label="  ✕  Clear All",      command=self._clear_all)
+        mb.add_cascade(label="Edit", menu=em)
+
+        # ── Rewrite ───────────────────────────────────────────────────────────
+        rm = _m(mb)
+        rm.add_command(
+            label="  ✏  Rewrite Selected Text",
+            command=self._rewrite_selected,
+            accelerator="Ctrl+Shift+R",
+            state="disabled")           # enabled once Ollama is ready
+        self._rewrite_menu = rm         # keep ref to enable / disable entry 0
+
+        mb.add_cascade(label="Rewrite", menu=rm)
+
+        # ── Tools ─────────────────────────────────────────────────────────────
+        tm = _m(mb)
+        tm.add_command(label="  📖  Terminology Editor…",
+                       command=self._open_editor)
+        tm.add_command(label="  🎙  Voice Commands Editor…",
+                       command=self._open_voice_editor)
+        mb.add_cascade(label="Tools", menu=tm)
+
+        # ── Settings ──────────────────────────────────────────────────────────
+        sm = _m(mb)
+
+        # Whisper model submenu
+        wm = _m(sm)
+        for mdl in ["tiny", "base", "small", "medium", "large-v2", "large-v3"]:
+            wm.add_command(label=f"  {mdl}",
+                           command=lambda m=mdl: self._change_model_to(m))
+        sm.add_cascade(label="  Whisper Model", menu=wm)
+
+        # Font size submenu
+        fsm = _m(sm)
+        fsm.add_command(label="  Larger    A+",       command=self._font_up)
+        fsm.add_command(label="  Smaller   A−",       command=self._font_down)
+        fsm.add_command(label="  Reset to Default",   command=self._font_reset)
+        sm.add_cascade(label="  Font Size", menu=fsm)
+
+        sm.add_separator()
+        self._autocopy_var = tk.BooleanVar(
+            value=self.cfg.ui.auto_copy_to_clipboard)
+        sm.add_checkbutton(
+            label="  Auto-copy to Clipboard",
+            variable=self._autocopy_var,
+            command=self._toggle_autocopy)
+        sm.add_separator()
+        sm.add_command(label="  Configure Ollama / AI Model…",
+                       command=self._configure_ollama)
+        mb.add_cascade(label="Settings", menu=sm)
+
+        # ── Help ──────────────────────────────────────────────────────────────
+        hm = _m(mb)
+        hm.add_command(label="  ❓  How to Use",          command=self._show_help)
+        hm.add_command(label="  ⌨   Keyboard Shortcuts",  command=self._show_shortcuts)
+        hm.add_separator()
+        hm.add_command(label="  ℹ   About",               command=self._show_about)
+        mb.add_cascade(label="Help", menu=hm)
+
+        self.config(menu=mb)
+
+    # ── Settings helpers ──────────────────────────────────────────────────────
+
+    def _change_model_to(self, model_name: str):
+        """Switch the Whisper model from the Settings menu."""
+        self._mdl_var.set(model_name)
+        self._on_model_change()
+
+    def _font_reset(self):
+        """Reset text size to the application default."""
+        self._font_size = FONT_SIZE_DEFAULT
+        self._apply_font()
+
+    def _toggle_autocopy(self):
+        """Sync auto-copy setting when the menu checkbox is toggled."""
+        self.cfg.ui.auto_copy_to_clipboard = self._autocopy_var.get()
+
+    def _configure_ollama(self):
+        """Dialog to view / change the Ollama endpoint, model, and timeout."""
+        d = tk.Toplevel(self)
+        d.title("Configure Ollama / AI Model")
+        d.configure(bg=BG)
+        d.geometry("540x330")
+        d.minsize(420, 280)
+        d.resizable(True, True)
+        d.transient(self)
+        d.grab_set()
+
+        pad = ttk.Frame(d, padding=20)
+        pad.pack(fill="both", expand=True)
+        pad.columnconfigure(1, weight=1)
+
+        tk.Label(pad, text="Ollama Configuration",
+                 font=("Segoe UI", 13, "bold"), bg=BG, fg=ACCENT)\
+            .grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 14))
+
+        ep_var  = tk.StringVar(value=self.cfg.llm.endpoint)
+        mdl_var = tk.StringVar(value=self.cfg.llm.model)
+        to_var  = tk.StringVar(value=str(self.cfg.llm.timeout_seconds))
+
+        for r, lbl, var in [
+            (1, "Endpoint URL:",       ep_var),
+            (2, "Model name:",         mdl_var),
+            (3, "Timeout (seconds):",  to_var),
+        ]:
+            tk.Label(pad, text=lbl, font=FONT_UI, bg=BG, fg=TEXT_MED)\
+                .grid(row=r, column=0, sticky="w", padx=(0, 14), pady=4)
+            tk.Entry(pad, textvariable=var, bg=BG2, fg=TEXT,
+                     insertbackground=TEXT, relief="solid", bd=1,
+                     font=FONT_UI, highlightthickness=0)\
+                .grid(row=r, column=1, sticky="ew", ipady=5)
+
+        status_lbl = tk.Label(pad, text="", font=FONT_SMALL,
+                               bg=BG, fg=TEXT_DIM, anchor="w")
+        status_lbl.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+
+        btns = tk.Frame(pad, bg=BG)
+        btns.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+
+        def _test():
+            status_lbl.config(text="Testing connection…", fg=AMBER)
+            d.update_idletasks()
+            try:
+                tmp = OllamaClient(endpoint=ep_var.get(),
+                                   model=mdl_var.get(), timeout=8)
+                ok, msg = tmp.check_status()
+                status_lbl.config(
+                    text=("✓  " if ok else "✗  ") + msg[:90],
+                    fg=GREEN_OK if ok else RED_REC)
+            except Exception as exc:
+                status_lbl.config(text=f"Error: {exc}", fg=RED_REC)
+
+        def _save():
+            try:
+                self.cfg.llm.endpoint        = ep_var.get().strip()
+                self.cfg.llm.model           = mdl_var.get().strip()
+                self.cfg.llm.timeout_seconds = int(to_var.get().strip())
+                if self._rewrite_svc:
+                    self._rewrite_svc.client.base_url = self.cfg.llm.endpoint
+                    self._rewrite_svc.client._gen_url  = (
+                        f"{self.cfg.llm.endpoint}/api/generate")
+                    self._rewrite_svc.client._tags_url = (
+                        f"{self.cfg.llm.endpoint}/api/tags")
+                    self._rewrite_svc.client.model   = self.cfg.llm.model
+                    self._rewrite_svc.client.timeout = self.cfg.llm.timeout_seconds
+                d.destroy()
+            except ValueError:
+                status_lbl.config(
+                    text="Timeout must be a whole number of seconds", fg=RED_REC)
+
+        for text, cmd, bg_, fg_ in [
+            ("Test Connection", _test,      BG3,     TEXT_MED),
+            ("✓  Save",         _save,      ACCENT,  "white"),
+            ("Cancel",          d.destroy,  BG3,     TEXT_MED),
+        ]:
+            tk.Button(btns, text=text, font=FONT_UI, bg=bg_, fg=fg_,
+                      activebackground=ACCENT_H if bg_ == ACCENT else ACCENT_L,
+                      activeforeground="white" if bg_ == ACCENT else ACCENT,
+                      relief="flat", bd=0, padx=14, pady=6,
+                      cursor="hand2", command=cmd)\
+                .pack(side="left", padx=(0, 6))
+
+    # ── Help dialogs ──────────────────────────────────────────────────────────
+
+    def _show_about(self):
+        d = tk.Toplevel(self)
+        d.title("About — Pathology Dictation Assistant")
+        d.configure(bg=BG)
+        d.geometry("480x390")
+        d.resizable(False, False)
+        d.transient(self)
+        d.grab_set()
+
+        pad = ttk.Frame(d, padding=28)
+        pad.pack(fill="both", expand=True)
+
+        tk.Label(pad, text="🔬", font=("Segoe UI Emoji", 36),
+                 bg=BG).pack()
+        tk.Label(pad, text="Pathology Dictation Assistant",
+                 font=("Segoe UI", 15, "bold"), bg=BG, fg=ACCENT).pack(pady=(6, 2))
+        tk.Label(pad, text=f"Version {APP_VERSION}   •   Local · Offline · Privacy-first",
+                 font=FONT_SMALL, bg=BG, fg=TEXT_DIM).pack()
+
+        tk.Frame(pad, bg=BORDER, height=1).pack(fill="x", pady=16)
+
+        info = (
+            "Transcribes pathology dictations locally using OpenAI Whisper\n"
+            "(via faster-whisper)  —  no cloud, no internet required.\n\n"
+            "AI rewrite uses Ollama with Qwen2.5 running on localhost.\n"
+            "No patient data ever leaves this computer.\n\n"
+            "Built with:  Python  ·  Tkinter  ·  faster-whisper  ·  Ollama"
+        )
+        tk.Label(pad, text=info, font=FONT_UI, bg=BG, fg=TEXT_MED,
+                 justify="center").pack()
+
+        tk.Frame(pad, bg=BORDER, height=1).pack(fill="x", pady=16)
+        tk.Label(pad, text="Private repository — not for public distribution",
+                 font=FONT_SMALL, bg=BG, fg=TEXT_DIM).pack()
+
+        tk.Button(pad, text="Close", font=FONT_UI, bg=ACCENT, fg="white",
+                  activebackground=ACCENT_H, activeforeground="white",
+                  relief="flat", bd=0, padx=22, pady=7,
+                  cursor="hand2", command=d.destroy).pack(pady=(16, 0))
+
+    def _show_help(self):
+        d = tk.Toplevel(self)
+        d.title("How to Use — Pathology Dictation Assistant")
+        d.configure(bg=BG)
+        d.geometry("660x560")
+        d.minsize(520, 420)
+        d.resizable(True, True)
+        d.transient(self)
+        d.grab_set()
+
+        pad = ttk.Frame(d, padding=20)
+        pad.pack(fill="both", expand=True)
+        pad.rowconfigure(1, weight=1)
+        pad.columnconfigure(0, weight=1)
+
+        tk.Label(pad, text="How to Use",
+                 font=("Segoe UI", 13, "bold"), bg=BG, fg=ACCENT)\
+            .grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        txt = scrolledtext.ScrolledText(
+            pad, wrap="word", font=("Segoe UI", 11),
+            bg=BG2, fg=TEXT, relief="solid", bd=1,
+            padx=14, pady=10, highlightthickness=0, state="normal")
+        txt.grid(row=1, column=0, sticky="nsew")
+
+        help_text = """\
+BASIC DICTATION WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1.  Press F9  (or click Start Recording)
+  2.  Speak your dictation clearly
+  3.  Press F9 again  (or click Stop Recording)
+  4.  The app transcribes locally using Whisper
+  5.  Terminology corrections are applied automatically
+  6.  Corrected text is copied to the clipboard
+  7.  Switch to your LIS or Word and press Ctrl+V to paste
+
+
+TABS
+━━━━
+
+  🎙 Live      — Real-time streaming preview while you speak
+  ✏ Corrected — Final transcription with corrections applied
+                 You can edit this text freely
+
+
+EDITING IN THE CORRECTED PANEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  • Click anywhere in the Corrected panel and type to make changes
+  • Ctrl+Z  — Undo last edit
+  • Ctrl+Y  — Redo last undone edit
+  • Select any text then Ctrl+Shift+R to rewrite it with AI
+
+
+AI REWRITE  (requires Ollama)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  1.  In the Corrected panel, select the text you want to rewrite
+  2.  Click  ✏ Rewrite Selected Text  in the toolbar, or press Ctrl+Shift+R
+  3.  Wait a few seconds for the Qwen model to respond
+  4.  A preview dialog shows the original and rewritten versions side-by-side
+  5.  Edit the rewritten text in the right pane if needed
+  6.  Click  ✓ Accept Rewrite  to replace the selection
+      — or —  ✗ Reject  to keep the original unchanged
+
+  Note: Ollama must be installed.  The button is disabled if Ollama is unavailable.
+  The AI is strictly instructed NEVER to add diagnoses or new findings.
+
+
+TERMINOLOGY CORRECTIONS
+━━━━━━━━━━━━━━━━━━━━━━━
+
+  Open  Tools > Terminology Editor  to add, edit, or remove auto-corrections.
+  Corrections are applied automatically after every dictation.
+  Example:  "informally"  →  "in formalin"
+
+
+VOICE COMMANDS
+━━━━━━━━━━━━━━
+
+  Built-in commands (say these words while dictating):
+    "enter" or "new line"  →  inserts a line break
+    "new paragraph"        →  inserts a blank line
+    "finish case"          →  inserts a case separator  ( *** )
+
+  Add your own commands in  Tools > Voice Commands Editor.
+
+
+SAVING
+━━━━━━
+
+  File > Save as .txt   — plain text file
+  File > Save as .docx  — formatted Word document  (requires python-docx)
+
+
+SETTINGS
+━━━━━━━━
+
+  Settings > Whisper Model       — change transcription model
+                                   (larger = more accurate, slower)
+  Settings > Font Size           — increase or decrease text panel size
+  Settings > Auto-copy           — toggle automatic clipboard copy after dictation
+  Settings > Configure Ollama    — change the AI endpoint, model name, or timeout
+"""
+
+        txt.insert("1.0", help_text)
+        txt.config(state="disabled")
+
+        tk.Button(pad, text="Close", font=FONT_UI, bg=ACCENT, fg="white",
+                  activebackground=ACCENT_H, activeforeground="white",
+                  relief="flat", bd=0, padx=22, pady=7,
+                  cursor="hand2", command=d.destroy)\
+            .grid(row=2, column=0, pady=(12, 0))
+
+    def _show_shortcuts(self):
+        d = tk.Toplevel(self)
+        d.title("Keyboard Shortcuts")
+        d.configure(bg=BG)
+        d.geometry("430x380")
+        d.resizable(False, False)
+        d.transient(self)
+        d.grab_set()
+
+        pad = ttk.Frame(d, padding=24)
+        pad.pack(fill="both", expand=True)
+
+        tk.Label(pad, text="Keyboard Shortcuts",
+                 font=("Segoe UI", 13, "bold"), bg=BG, fg=ACCENT).pack(anchor="w")
+        tk.Frame(pad, bg=BORDER, height=1).pack(fill="x", pady=(8, 16))
+
+        shortcuts = [
+            ("F9",            "Start / Stop recording"),
+            ("Esc",           "Cancel recording  (no transcription)"),
+            ("",              ""),
+            ("Ctrl+Z",        "Undo last edit  (Corrected panel)"),
+            ("Ctrl+Y",        "Redo last undo  (Corrected panel)"),
+            ("",              ""),
+            ("Ctrl+Shift+R",  "Rewrite selected text with AI"),
+            ("",              ""),
+            ("Ctrl+S",        "Save as .txt"),
+        ]
+
+        for key, desc in shortcuts:
+            if not key and not desc:
+                tk.Frame(pad, bg=BG, height=6).pack(fill="x")
+                continue
+            row = tk.Frame(pad, bg=BG)
+            row.pack(fill="x", pady=2)
+            tk.Label(row, text=key,
+                     font=("Consolas", 10, "bold"),
+                     bg=ACCENT_L, fg=ACCENT,
+                     padx=10, pady=3, width=18, anchor="center")\
+                .pack(side="left")
+            tk.Label(row, text=desc, font=FONT_UI, bg=BG, fg=TEXT)\
+                .pack(side="left", padx=(12, 0))
+
+        tk.Frame(pad, bg=BORDER, height=1).pack(fill="x", pady=(16, 12))
+        tk.Button(pad, text="Close", font=FONT_UI, bg=ACCENT, fg="white",
+                  activebackground=ACCENT_H, activeforeground="white",
+                  relief="flat", bd=0, padx=22, pady=7,
+                  cursor="hand2", command=d.destroy).pack()
+
     # ── Build UI ──────────────────────────────────────────────────────────────
 
     def _build(self):
+        # ── Menubar ──
+        self._build_menubar()
+
         # Row 0 = header   (fixed)
         # Row 1 = rec bar  (fixed)
         # Row 2 = notebook (stretches)
@@ -797,6 +1200,8 @@ class App(tk.Tk):
         self.bind("<Escape>",           lambda _: self._stop_only() if self.is_recording else None)
         self.bind("<Control-Shift-R>",  lambda _: self._rewrite_selected())
         self.bind("<Control-Shift-r>",  lambda _: self._rewrite_selected())
+        self.bind("<Control-s>",        lambda _: self._save_txt())
+        self.bind("<Control-S>",        lambda _: self._save_txt())
 
     # ── Header ────────────────────────────────────────────────────────────────
 
@@ -901,10 +1306,6 @@ class App(tk.Tk):
         self._corr_box = self._editable_textbox(self._nb)
         self._nb.add(self._corr_box, text="  ✏  Corrected  ")
 
-        # Rewritten tab — readonly AI output
-        self._rewr_box = self._textbox(self._nb)
-        self._nb.add(self._rewr_box, text="  ✨  Rewritten  ")
-
         self._nb.select(0)
 
         # Bind Ctrl+Y for Redo on the editable corrected box
@@ -985,71 +1386,64 @@ class App(tk.Tk):
         bar = tk.Frame(parent, bg=BG2,
                         highlightthickness=1, highlightbackground=BORDER)
         bar.grid(row=3, column=0, sticky="ew")
-        bar.columnconfigure(98, weight=1)   # spacer
 
-        def btn(col, text, cmd, bg=BG2, fg=TEXT_MED, fg_h="white", bg_h=ACCENT,
-                padx=14, bold=False, **kw):
+        # ── Row 0: action buttons (pack layout — right side first) ───────────
+        row0 = tk.Frame(bar, bg=BG2)
+        row0.pack(fill="x", padx=6, pady=(6, 2))
+
+        def lbtn(text, cmd, fg=TEXT_MED, bg_h=ACCENT, fg_h="white",
+                 padx=12, bold=False, **kw):
             f = ("Segoe UI", 10, "bold") if bold else ("Segoe UI", 10)
-            b = tk.Button(bar, text=text, font=f, bg=bg, fg=fg,
+            b = tk.Button(row0, text=text, font=f, bg=BG2, fg=fg,
                           activebackground=bg_h, activeforeground=fg_h,
-                          relief="flat", bd=0, padx=padx, pady=8,
+                          relief="flat", bd=0, padx=padx, pady=7,
                           cursor="hand2", command=cmd, **kw)
-            b.grid(row=0, column=col, padx=(0, 2), pady=6)
+            b.pack(side="left", padx=(0, 2))
             return b
 
-        btn(0,  "📖  Terminology",    self._open_editor,       fg=ACCENT, bold=True)
-        btn(1,  "🎙  Voice Cmds",    self._open_voice_editor, fg=ACCENT)
-        btn(2,  "📋  Copy",           self._copy_result)
-        self._save_btn = btn(3, "💾  Save ▼", self._show_save_menu)
-        btn(4,  "✕  Clear",           self._clear_all,        fg=TEXT_DIM, padx=10)
+        def rbtn(text, cmd, fg=TEXT_MED, bg_h=ACCENT, fg_h="white",
+                 padx=12, bold=False, **kw):
+            f = ("Segoe UI", 10, "bold") if bold else ("Segoe UI", 10)
+            b = tk.Button(row0, text=text, font=f, bg=BG2, fg=fg,
+                          activebackground=bg_h, activeforeground=fg_h,
+                          relief="flat", bd=0, padx=padx, pady=7,
+                          cursor="hand2", command=cmd, **kw)
+            b.pack(side="right", padx=(2, 0))
+            return b
 
-        # Thin vertical divider
-        tk.Frame(bar, bg=BORDER, width=1).grid(row=0, column=5,
-                                                padx=(8, 8), sticky="ns", pady=8)
+        def sep_l():
+            tk.Frame(row0, bg=BORDER, width=1).pack(
+                side="left", fill="y", padx=(6, 6), pady=4)
 
-        # AI rewrite controls
-        tk.Label(bar, text="AI:", font=FONT_SMALL,
-                 bg=BG2, fg=TEXT_DIM)\
-            .grid(row=0, column=6, padx=(0, 4))
-        self._rewr_model_var = tk.StringVar()
-        self._rewr_model_cb  = ttk.Combobox(
-            bar, textvariable=self._rewr_model_var,
-            width=22, state="readonly")
-        self._rewr_model_cb.grid(row=0, column=7, padx=(0, 4), pady=6)
-        self._rewrite_btn = btn(8, "✨  Rewrite", self._rewrite, fg=ACCENT)
+        def sep_r():
+            tk.Frame(row0, bg=BORDER, width=1).pack(
+                side="right", fill="y", padx=(6, 6), pady=4)
 
-        # Refresh model list button
-        btn(9, "↺", self._populate_rewrite_models, fg=TEXT_DIM, padx=6)
-
-        # Thin vertical divider (2nd)
-        tk.Frame(bar, bg=BORDER, width=1).grid(row=0, column=11,
-                                                padx=(10, 8), sticky="ns", pady=8)
-
-        # Font size controls
-        tk.Label(bar, text="Text size:", font=FONT_SMALL,
-                 bg=BG2, fg=TEXT_DIM)\
-            .grid(row=0, column=12, padx=(0, 6))
-        btn(13, "A−", self._font_down, padx=10)
-        self._size_lbl = tk.Label(bar, text=str(self._font_size), width=3,
+        # Right side first (stays visible as window narrows)
+        rbtn("⏻  Exit", self._on_close, fg=RED_REC, bg_h=RED_REC, padx=12)
+        sep_r()
+        rbtn("A+", self._font_up, padx=8)
+        self._size_lbl = tk.Label(row0, text=str(self._font_size), width=3,
                                    font=("Segoe UI", 10, "bold"),
                                    bg=BG2, fg=TEXT_MED, anchor="center")
-        self._size_lbl.grid(row=0, column=14)
-        btn(15, "A+", self._font_up, padx=10)
+        self._size_lbl.pack(side="right")
+        rbtn("A−", self._font_down, padx=8)
+        tk.Label(row0, text="Size:", font=FONT_SMALL,
+                 bg=BG2, fg=TEXT_DIM).pack(side="right", padx=(0, 2))
+        sep_r()
 
-        # Populate rewrite model list now that widgets exist
-        self._populate_rewrite_models()
+        # Left side
+        lbtn("📖  Terminology",   self._open_editor,       fg=ACCENT, bold=True)
+        lbtn("🎙  Voice Cmds",    self._open_voice_editor, fg=ACCENT)
+        sep_l()
+        lbtn("📋  Copy",          self._copy_result)
+        self._save_btn = lbtn("💾  Save ▼", self._show_save_menu)
+        lbtn("✕  Clear",          self._clear_all, fg=TEXT_DIM, padx=10)
 
-        # Spacer
-        tk.Frame(bar, bg=BG2).grid(row=0, column=98, sticky="ew")
-
-        # Status
+        # ── Row 1: footer / status ────────────────────────────────────────────
         self._foot = tk.Label(bar, text="", font=FONT_SMALL,
-                               bg=BG2, fg=TEXT_DIM, anchor="e")
-        self._foot.grid(row=0, column=99, padx=(0, 12), sticky="e")
-
-        # Exit
-        btn(100, "⏻  Exit", self._on_close, fg=RED_REC,
-            bg_h=RED_REC, padx=12)
+                               bg=BG2, fg=TEXT_DIM, anchor="w")
+        self._foot.pack(fill="x", padx=10, pady=(0, 5))
 
     # ── Save menu ─────────────────────────────────────────────────────────────
 
@@ -1333,8 +1727,25 @@ class App(tk.Tk):
             self._ui_q.put(("rewrite_sel_done",
                              sel_text, result, sel_start, sel_end))
         except OllamaConnectionError as exc:
-            self._ui_q.put(("rewrite_sel_error", str(exc)))
+            msg = str(exc)
+            # Distinguish a timeout (model took too long) from a genuine
+            # "not running" error so the user gets actionable guidance.
+            if "timed out" in msg.lower() or "timeout" in msg.lower():
+                friendly = (
+                    f"The Ollama request timed out after "
+                    f"{self.cfg.llm.timeout_seconds} seconds.\n\n"
+                    "The model may need more time on first inference, or\n"
+                    "the GPU may be busy with transcription.\n\n"
+                    "Try again in a few seconds, or increase\n"
+                    "'timeout_seconds' in config/config.yaml."
+                )
+                logger.warning(f"Ollama rewrite timed out: {exc}")
+                self._ui_q.put(("rewrite_sel_error", friendly))
+            else:
+                logger.warning(f"Ollama connection error during rewrite: {exc}")
+                self._ui_q.put(("rewrite_sel_error", msg))
         except OllamaError as exc:
+            logger.warning(f"Ollama error during rewrite: {exc}")
             self._ui_q.put(("rewrite_sel_error", str(exc)))
         except Exception as exc:
             logger.error(f"_rewrite_selected_bg: {exc}", exc_info=True)
@@ -1359,16 +1770,14 @@ class App(tk.Tk):
     def _apply_font(self):
         self._size_lbl.config(text=str(self._font_size))
         f = ("Segoe UI", self._font_size)
-        for box in (self._live_box, self._corr_box, self._rewr_box):
+        for box in (self._live_box, self._corr_box):
             box.config(font=f)
 
     # ── Save ──────────────────────────────────────────────────────────────────
 
     def _current_text(self) -> str:
-        """Return best available text: rewritten > corrected > live."""
-        t = self._rewr_box.get("1.0", "end").strip()
-        if not t:
-            t = self._corr_box.get("1.0", "end").strip()
+        """Return best available text: corrected > live."""
+        t = self._corr_box.get("1.0", "end").strip()
         if not t:
             t = self._live_box.get("1.0", "end").strip()
         return t
@@ -1566,14 +1975,16 @@ class App(tk.Tk):
             # Apply voice commands first, then terminology correction
             raw_after_vc, vc_applied = self._voice_cmd.process(raw)
             corrected, changes = self._corrector.correct_with_logging(raw_after_vc)
-            ClipboardHandler.copy_to_clipboard(corrected)
+            if self.cfg.ui.auto_copy_to_clipboard:
+                ClipboardHandler.copy_to_clipboard(corrected)
             self._ui_q.put(("final", raw, corrected, changes, vc_applied))
             n = len(changes)
             v = len(vc_applied)
             status_parts = [f"Done  ·  {n} correction{'s' if n!=1 else ''} applied"]
             if v:
                 status_parts.append(f"{v} voice command{'s' if v!=1 else ''}")
-            status_parts.append("copied to clipboard")
+            if self.cfg.ui.auto_copy_to_clipboard:
+                status_parts.append("copied to clipboard")
             self._ui_q.put(("status", "  ·  ".join(status_parts), GREEN_OK))
         except Exception as e:
             logger.error(f"finalize: {e}", exc_info=True)
@@ -1637,10 +2048,10 @@ class App(tk.Tk):
                         self._changes_lbl.config(
                             text="  No voice commands or terminology corrections applied.")
                 elif op == "rewrite_done":
-                    self._append_box(self._rewr_box, m[1], TEXT)
-                    self._nb.select(2)   # Switch to Rewritten tab
+                    self._append_box(self._corr_box, m[1], TEXT, stay_enabled=True)
+                    self._nb.select(1)   # Switch to Corrected tab
                 elif op == "rewrite_btn_enable":
-                    self._rewrite_btn.config(state="normal")
+                    pass   # GGUF rewrite button removed from bottom bar
                 elif op == "rewrite_sel_done":
                     # m = ("rewrite_sel_done", original, rewritten, sel_start, sel_end)
                     _, original, rewritten, sel_start, sel_end = m
@@ -1676,11 +2087,15 @@ class App(tk.Tk):
                     _, state, detail = m
                     if state == "ready":
                         self._rewrite_sel_btn.config(state="normal")
+                        if hasattr(self, "_rewrite_menu"):
+                            self._rewrite_menu.entryconfig(0, state="normal")
                         self._foot.config(
                             text=f"Ollama: {detail}  ✓", fg=GREEN_OK)
                     elif state == "no_model":
                         # Ollama is running but model not pulled
                         self._rewrite_sel_btn.config(state="disabled")
+                        if hasattr(self, "_rewrite_menu"):
+                            self._rewrite_menu.entryconfig(0, state="disabled")
                         self._foot.config(
                             text=f"Ollama: '{detail}' not installed — run: "
                                  f"ollama pull {detail}",
@@ -1696,6 +2111,8 @@ class App(tk.Tk):
                     elif state == "unavailable":
                         # Not running and could not be started
                         self._rewrite_sel_btn.config(state="disabled")
+                        if hasattr(self, "_rewrite_menu"):
+                            self._rewrite_menu.entryconfig(0, state="disabled")
                         self._foot.config(
                             text="Ollama unavailable — rewrite disabled  "
                                  "(dictation works normally)",
@@ -1767,9 +2184,8 @@ class App(tk.Tk):
             self._set_status("Nothing to copy yet.", RED_REC)
 
     def _clear_all(self):
-        # Readonly boxes
-        for box in (self._live_box, self._rewr_box):
-            self._write_box(box, "")
+        # Readonly live box
+        self._write_box(self._live_box, "")
         # Editable corrected box — stays enabled
         self._corr_box.delete("1.0", "end")
         self._changes_lbl.config(text="")
@@ -1850,7 +2266,7 @@ class App(tk.Tk):
             result = self._rewriter.rewrite(text)
             self._ui_q.put(("rewrite_done", result))
             self._ui_q.put(("status",
-                             "Rewrite complete  ·  see  ✨ Rewritten  tab", GREEN_OK))
+                             "Rewrite complete  ·  appended to  ✏ Corrected  tab", GREEN_OK))
         except Exception as e:
             logger.error(f"rewrite_bg: {e}", exc_info=True)
             self._ui_q.put(("status", f"Rewrite error: {e}", RED_REC))

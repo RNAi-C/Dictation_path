@@ -63,7 +63,7 @@ class LLMConfig:
     model:                        str   = "qwen2.5:14b"
     temperature:                  float = 0.1
     max_tokens:                   int   = 512
-    timeout_seconds:              int   = 60
+    timeout_seconds:              int   = 120
     # Auto-start settings
     auto_start_ollama:            bool  = True
     ollama_start_command:         str   = "ollama serve"

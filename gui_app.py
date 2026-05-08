@@ -27,6 +27,8 @@ from transcriber import PathologyTranscriber
 from terminology_corrector import TerminologyCorrector
 from clipboard_handler import ClipboardHandler
 from rewriter import LocalRewriter, scan_models
+from ollama_client import OllamaClient, OllamaError, OllamaConnectionError
+from rewrite_service import RewriteService
 
 
 # ── Light palette ─────────────────────────────────────────────────────────────
@@ -554,6 +556,126 @@ class VoiceCommandEditor(tk.Toplevel):
             messagebox.showerror("Save failed", str(e), parent=self)
 
 
+# ── Rewrite preview dialog ────────────────────────────────────────────────────
+
+class RewritePreviewDialog(tk.Toplevel):
+    """
+    Modal dialog that shows the original selected text alongside the
+    AI-rewritten version.  The user may edit the rewritten version before
+    accepting.  Pressing Accept calls on_accept(final_text); pressing Reject
+    calls on_reject() and leaves the Corrected panel unchanged.
+    """
+
+    def __init__(self, parent, original: str, rewritten: str,
+                 on_accept, on_reject):
+        super().__init__(parent)
+        self.title("AI Rewrite Preview")
+        self.configure(bg=BG)
+        self.geometry("940x540")
+        self.minsize(700, 380)
+        self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
+        self._on_accept = on_accept
+        self._on_reject = on_reject
+        self._build(original, rewritten)
+        self.focus_set()
+        # Keyboard shortcuts inside dialog
+        self.bind("<Return>",  lambda _: None)          # prevent accidental close
+        self.bind("<Escape>",  lambda _: self._reject())
+
+    def _build(self, original: str, rewritten: str):
+        root = ttk.Frame(self, padding=16)
+        root.pack(fill="both", expand=True)
+        root.columnconfigure(0, weight=1)
+        root.columnconfigure(1, weight=1)
+        root.rowconfigure(1, weight=1)
+
+        # ── Title ──
+        hdr = tk.Frame(root, bg=BG)
+        hdr.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+        tk.Label(hdr, text="AI Rewrite Preview",
+                 font=("Segoe UI", 13, "bold"), bg=BG, fg=ACCENT)\
+            .pack(side="left")
+        tk.Label(hdr,
+                 text="  You may edit the rewritten text before accepting.",
+                 font=FONT_SMALL, bg=BG, fg=TEXT_DIM)\
+            .pack(side="left", padx=(8, 0))
+
+        # ── Left pane: original (readonly) ──
+        lf = tk.Frame(root, bg=BG)
+        lf.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        lf.columnconfigure(0, weight=1)
+        lf.rowconfigure(1, weight=1)
+
+        tk.Label(lf, text="Original selected text",
+                 font=("Segoe UI", 10, "bold"), bg=BG, fg=TEXT_MED)\
+            .grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        orig_box = scrolledtext.ScrolledText(
+            lf, wrap="word", font=FONT_MONO,
+            bg="#FFF9F0", fg=TEXT,
+            relief="solid", bd=1, highlightthickness=0,
+            padx=10, pady=8, state="normal")
+        orig_box.grid(row=1, column=0, sticky="nsew")
+        orig_box.insert("1.0", original)
+        orig_box.config(state="disabled")
+
+        # ── Right pane: rewritten (editable) ──
+        rf = tk.Frame(root, bg=BG)
+        rf.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+        rf.columnconfigure(0, weight=1)
+        rf.rowconfigure(1, weight=1)
+
+        tk.Label(rf, text="Rewritten text",
+                 font=("Segoe UI", 10, "bold"), bg=BG, fg=ACCENT)\
+            .grid(row=0, column=0, sticky="w", pady=(0, 4))
+
+        self._rewr_edit = scrolledtext.ScrolledText(
+            rf, wrap="word", font=FONT_MONO,
+            bg="#F0FFF4", fg=TEXT, insertbackground=ACCENT,
+            relief="solid", bd=1, highlightthickness=0,
+            padx=10, pady=8, undo=True, state="normal")
+        self._rewr_edit.grid(row=1, column=0, sticky="nsew")
+        self._rewr_edit.insert("1.0", rewritten)
+        self._rewr_edit.focus_set()
+
+        # ── Divider ──
+        tk.Frame(root, bg=BORDER, height=1)\
+            .grid(row=2, column=0, columnspan=2, sticky="ew", pady=(12, 8))
+
+        # ── Buttons ──
+        btns = tk.Frame(root, bg=BG)
+        btns.grid(row=3, column=0, columnspan=2, sticky="ew")
+
+        tk.Button(btns, text="✓  Accept Rewrite", font=FONT_UI,
+                  bg=GREEN_OK, fg="white", activebackground="#155f39",
+                  activeforeground="white", relief="flat", bd=0,
+                  padx=20, pady=8, cursor="hand2",
+                  command=self._accept)\
+            .pack(side="left")
+
+        tk.Button(btns, text="✗  Reject — Keep Original", font=FONT_UI,
+                  bg=RED_SOFT, fg=RED_REC, activebackground="#fcd5d0",
+                  activeforeground=RED_REC, relief="flat", bd=0,
+                  padx=20, pady=8, cursor="hand2",
+                  command=self._reject)\
+            .pack(side="left", padx=(8, 0))
+
+        tk.Label(btns, text="Esc = reject",
+                 font=FONT_SMALL, bg=BG, fg=TEXT_DIM)\
+            .pack(side="right", padx=(0, 4))
+
+    def _accept(self):
+        final = self._rewr_edit.get("1.0", "end-1c")
+        self._on_accept(final)
+        self.destroy()
+
+    def _reject(self):
+        self._on_reject()
+        self.destroy()
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
@@ -589,8 +711,12 @@ class App(tk.Tk):
         _vc_path = Path(__file__).parent / "config" / "voice_commands.json"
         self._voice_cmd = VoiceCommandProcessor(config_path=_vc_path)
 
-        # AI rewriter (lazy-loaded when first used)
+        # GGUF rewriter (lazy-loaded when first used — whole-text rewrite)
         self._rewriter: Optional[LocalRewriter] = None
+
+        # Ollama rewrite service (selected-text rewrite)
+        self._rewrite_svc: Optional[RewriteService] = None
+        self._init_ollama()
 
         self._style()
         self._build()
@@ -667,8 +793,10 @@ class App(tk.Tk):
         # ── Bottom bar ──
         self._build_bottom(outer)
 
-        self.bind("<F9>",     lambda _: self._toggle_record())
-        self.bind("<Escape>", lambda _: self._stop_only() if self.is_recording else None)
+        self.bind("<F9>",               lambda _: self._toggle_record())
+        self.bind("<Escape>",           lambda _: self._stop_only() if self.is_recording else None)
+        self.bind("<Control-Shift-R>",  lambda _: self._rewrite_selected())
+        self.bind("<Control-Shift-r>",  lambda _: self._rewrite_selected())
 
     # ── Header ────────────────────────────────────────────────────────────────
 
@@ -779,10 +907,18 @@ class App(tk.Tk):
 
         self._nb.select(0)
 
+        # Bind Ctrl+Y for Redo on the editable corrected box
+        self._corr_box.bind("<Control-y>", lambda e: self._redo() or "break")
+        self._corr_box.bind("<Control-Y>", lambda e: self._redo() or "break")
+
+        # Edit toolbar (undo / redo / rewrite selected) — row 1
+        self._build_edit_toolbar(wrap)
+
+        # Changes / corrections summary — row 2
         self._changes_lbl = tk.Label(
             wrap, text="", font=("Segoe UI", 10), bg=BG2,
             fg=TEXT_MED, anchor="w", justify="left", wraplength=820)
-        self._changes_lbl.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self._changes_lbl.grid(row=2, column=0, sticky="w", pady=(4, 0))
 
     def _textbox(self, parent) -> scrolledtext.ScrolledText:
         return scrolledtext.ScrolledText(
@@ -796,7 +932,7 @@ class App(tk.Tk):
         )
 
     def _editable_textbox(self, parent) -> scrolledtext.ScrolledText:
-        """Textbox that stays editable (state='normal') — user can type freely."""
+        """Textbox that stays editable — undo/redo enabled, user can type freely."""
         return scrolledtext.ScrolledText(
             parent, wrap="word",
             font=("Segoe UI", self._font_size),
@@ -804,8 +940,43 @@ class App(tk.Tk):
             bg="#F7FFFE", fg=TEXT, insertbackground=ACCENT,
             relief="flat", bd=0, padx=14, pady=12,
             selectbackground=ACCENT_L, selectforeground=TEXT,
+            undo=True, maxundo=200,
             state="normal"
         )
+
+    def _build_edit_toolbar(self, parent):
+        """
+        Compact toolbar below the notebook tabs.
+        Contains: Undo · Redo | Rewrite Selected Text
+        This toolbar only operates on the Corrected (editable) panel.
+        """
+        bar = tk.Frame(parent, bg=BG2)
+        bar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+
+        def tbtn(text, cmd, fg=TEXT_MED, **kw):
+            b = tk.Button(bar, text=text, font=("Segoe UI", 9),
+                          bg=BG2, fg=fg,
+                          activebackground=ACCENT_L, activeforeground=ACCENT,
+                          relief="flat", bd=0, padx=10, pady=4,
+                          cursor="hand2", command=cmd, **kw)
+            b.pack(side="left", padx=(0, 2))
+            return b
+
+        tbtn("↩  Undo  Ctrl+Z", self._undo)
+        tbtn("↪  Redo  Ctrl+Y", self._redo)
+
+        tk.Frame(bar, bg=BORDER, width=1)\
+            .pack(side="left", fill="y", padx=(8, 8), pady=3)
+
+        self._rewrite_sel_btn = tbtn(
+            "✏  Rewrite Selected Text   Ctrl+Shift+R",
+            self._rewrite_selected, fg=ACCENT)
+
+        # Right-side hint
+        tk.Label(bar,
+                 text="✎ Corrected tab is editable — type freely or rewrite selection with AI",
+                 font=("Segoe UI", 9), bg=BG2, fg=TEXT_DIM)\
+            .pack(side="right", padx=(0, 6))
 
     # ── Bottom bar ────────────────────────────────────────────────────────────
 
@@ -966,6 +1137,121 @@ class App(tk.Tk):
             n = len(self._voice_cmd.commands)
             self._set_status(f"Voice commands saved  ·  {n} commands active", GREEN_OK)
         VoiceCommandEditor(self, self._voice_cmd, _reload)
+
+    # ── Undo / Redo ───────────────────────────────────────────────────────────
+
+    def _undo(self):
+        """Undo the last edit in the Corrected text panel."""
+        try:
+            self._corr_box.edit_undo()
+        except tk.TclError:
+            pass   # Nothing to undo
+
+    def _redo(self):
+        """Redo the last undone edit in the Corrected text panel."""
+        try:
+            self._corr_box.edit_redo()
+        except tk.TclError:
+            pass   # Nothing to redo
+
+    # ── Ollama rewrite selected text ──────────────────────────────────────────
+
+    def _init_ollama(self):
+        """Initialise the Ollama rewrite service from config.  Silent on failure."""
+        cfg = self.cfg.llm
+        if not cfg.enabled:
+            logger.info("LLM rewrite disabled in config")
+            return
+        try:
+            client = OllamaClient(
+                endpoint = cfg.endpoint,
+                model    = cfg.model,
+                timeout  = cfg.timeout_seconds,
+            )
+            self._rewrite_svc = RewriteService(
+                client      = client,
+                temperature = cfg.temperature,
+                max_tokens  = cfg.max_tokens,
+            )
+            logger.info(f"Ollama rewrite service ready: {cfg.model} @ {cfg.endpoint}")
+        except Exception as e:
+            logger.warning(f"Could not initialise Ollama service: {e}")
+            self._rewrite_svc = None
+
+    def _rewrite_selected(self):
+        """
+        Rewrite the text currently selected in the Corrected panel using Ollama.
+        If no text is selected, show a friendly prompt.
+        Runs the Ollama call in a background thread; shows a preview dialog on
+        completion.  The Corrected panel is locked during the request to preserve
+        selection indices.
+        """
+        # Must be on Corrected tab (index 1) for selection to make sense
+        # — but we allow the call from any tab; just need text selected.
+        try:
+            sel_start = self._corr_box.index(tk.SEL_FIRST)
+            sel_end   = self._corr_box.index(tk.SEL_LAST)
+            sel_text  = self._corr_box.get(sel_start, sel_end)
+        except tk.TclError:
+            messagebox.showinfo(
+                "No text selected",
+                "Please select text in the Corrected panel to rewrite.",
+                parent=self)
+            return
+
+        if not sel_text.strip():
+            messagebox.showinfo(
+                "Empty selection",
+                "The selected text is empty.  Please select some text.",
+                parent=self)
+            return
+
+        if self._rewrite_svc is None:
+            messagebox.showerror(
+                "Ollama not available",
+                "The Ollama rewrite service could not be initialised.\n\n"
+                "To use AI rewrite:\n"
+                "  1. Install Ollama:  https://ollama.ai\n"
+                f"  2. Pull model:      ollama pull {self.cfg.llm.model}\n"
+                "  3. Start server:    ollama serve\n"
+                "  4. Restart this app\n\n"
+                f"Configured endpoint: {self.cfg.llm.endpoint}\n"
+                f"Configured model:    {self.cfg.llm.model}",
+                parent=self)
+            return
+
+        # Lock the corrected box so indices stay valid during the request
+        self._corr_box.config(state="disabled")
+        self._rewrite_sel_btn.config(state="disabled")
+        self._nb.select(1)   # Make Corrected tab visible
+        self._set_status(
+            f"Rewriting selection with {self.cfg.llm.model}…  "
+            f"(may take up to {self.cfg.llm.timeout_seconds} s)", AMBER)
+
+        threading.Thread(
+            target = self._rewrite_selected_bg,
+            args   = (sel_text, sel_start, sel_end),
+            daemon = True,
+        ).start()
+
+    def _rewrite_selected_bg(self, sel_text: str,
+                              sel_start: str, sel_end: str):
+        """Background worker: call Ollama then post result to the UI queue."""
+        try:
+            result = self._rewrite_svc.rewrite(sel_text)
+            self._ui_q.put(("rewrite_sel_done",
+                             sel_text, result, sel_start, sel_end))
+        except OllamaConnectionError as exc:
+            self._ui_q.put(("rewrite_sel_error", str(exc)))
+        except OllamaError as exc:
+            self._ui_q.put(("rewrite_sel_error", str(exc)))
+        except Exception as exc:
+            logger.error(f"_rewrite_selected_bg: {exc}", exc_info=True)
+            self._ui_q.put(("rewrite_sel_error",
+                             f"Unexpected error: {exc}"))
+        finally:
+            # Always re-enable the button (text box re-enabled in _poll)
+            self._ui_q.put(("rewrite_sel_enable", None))
 
     # ── Font size ─────────────────────────────────────────────────────────────
 
@@ -1264,6 +1550,32 @@ class App(tk.Tk):
                     self._nb.select(2)   # Switch to Rewritten tab
                 elif op == "rewrite_btn_enable":
                     self._rewrite_btn.config(state="normal")
+                elif op == "rewrite_sel_done":
+                    # m = ("rewrite_sel_done", original, rewritten, sel_start, sel_end)
+                    _, original, rewritten, sel_start, sel_end = m
+                    # Unlock the corrected box before showing the dialog
+                    self._corr_box.config(state="normal")
+                    self._set_status("Rewrite ready — review in preview dialog",
+                                     GREEN_OK)
+                    def _on_accept(final_text,
+                                   _ss=sel_start, _se=sel_end):
+                        # Replace only the originally selected span
+                        self._corr_box.delete(_ss, _se)
+                        self._corr_box.insert(_ss, final_text)
+                        self._corr_box.edit_separator()   # single undo step
+                        self._set_status("Rewrite accepted", GREEN_OK)
+                    def _on_reject():
+                        self._set_status(
+                            "Rewrite rejected — original text kept", TEXT_DIM)
+                    RewritePreviewDialog(
+                        self, original, rewritten, _on_accept, _on_reject)
+                elif op == "rewrite_sel_error":
+                    _, msg = m
+                    self._corr_box.config(state="normal")
+                    self._set_status(f"Rewrite error — see dialog", RED_REC)
+                    messagebox.showerror("Rewrite failed", msg, parent=self)
+                elif op == "rewrite_sel_enable":
+                    self._rewrite_sel_btn.config(state="normal")
                 elif op == "msgbox":
                     _, lvl, title, txt = m
                     (messagebox.showerror if lvl == "error"

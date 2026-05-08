@@ -54,6 +54,18 @@ class UIConfig:
     show_console_output: bool = True
 
 
+@dataclass
+class LLMConfig:
+    """Local LLM rewrite configuration (Ollama)."""
+    enabled:          bool  = True
+    provider:         str   = "ollama"
+    endpoint:         str   = "http://localhost:11434"
+    model:            str   = "qwen2.5:14b"
+    temperature:      float = 0.1
+    max_tokens:       int   = 512
+    timeout_seconds:  int   = 60
+
+
 class PathologyDictationConfig:
     """Main configuration manager."""
 
@@ -66,6 +78,7 @@ class PathologyDictationConfig:
         self.dictionary = DictionaryConfig()
         self.hotkey = HotkeyConfig()
         self.ui = UIConfig()
+        self.llm = LLMConfig()
 
         # Paths
         self.project_root = Path(__file__).parent
@@ -106,6 +119,35 @@ class PathologyDictationConfig:
         self.models_dir.mkdir(exist_ok=True)
         self.audio_dir.mkdir(exist_ok=True)
         self.data_dir.mkdir(exist_ok=True)
+
+        # Always load LLM (and privacy) config from config.yaml when present —
+        # works in both dev and portable mode.
+        yaml_path = self.config_dir / "config.yaml"
+        if yaml_path.exists():
+            self._load_llm_from_yaml(yaml_path)
+
+    def _load_llm_from_yaml(self, yaml_path: Path) -> None:
+        """Parse the 'llm:' block from config.yaml and update self.llm."""
+        try:
+            import yaml
+            with open(yaml_path, encoding="utf-8") as f:
+                y = yaml.safe_load(f) or {}
+            llm = y.get("llm", {})
+            if not llm:
+                return
+            self.llm.enabled         = bool(llm.get("enabled",         self.llm.enabled))
+            self.llm.provider        = str( llm.get("provider",        self.llm.provider))
+            # endpoint: accept full URL (with path) or just base — strip path
+            ep = str(llm.get("endpoint", self.llm.endpoint))
+            import urllib.parse
+            parsed = urllib.parse.urlparse(ep)
+            self.llm.endpoint        = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ep
+            self.llm.model           = str(  llm.get("model",           self.llm.model))
+            self.llm.temperature     = float(llm.get("temperature",     self.llm.temperature))
+            self.llm.max_tokens      = int(  llm.get("max_tokens",      self.llm.max_tokens))
+            self.llm.timeout_seconds = int(  llm.get("timeout_seconds", self.llm.timeout_seconds))
+        except Exception as exc:
+            print(f"[config] Warning: could not load LLM config: {exc}")
 
     def _apply_yaml(self, yaml_path: Path, portable_root: Path) -> None:
         """Apply config.yaml overrides (portable mode only)."""

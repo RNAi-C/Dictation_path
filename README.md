@@ -97,6 +97,78 @@ See [`README_OFFLINE_PORTABLE.md`](README_OFFLINE_PORTABLE.md) for the full depl
 
 ---
 
+## AI Rewrite Selected Text (Ollama)
+
+The **Rewrite Selected Text** feature lets you select any portion of your dictated text in the Corrected panel and ask a local Qwen model to rewrite it into cleaner formal pathology report style.
+
+**Privacy guarantee:** All requests go to `localhost` only. No text leaves the computer.
+
+### 1 — Install Ollama
+
+Download and install from **https://ollama.ai** (Windows / macOS / Linux).
+
+### 2 — Pull the Qwen model
+
+Open a terminal and run:
+
+```powershell
+ollama pull qwen2.5:14b
+```
+
+> This downloads ~8 GB. You only need to do this once.
+> Smaller/faster alternatives: `qwen2.5:7b` (~4 GB), `qwen2.5:3b` (~2 GB)
+
+### 3 — Start Ollama
+
+```powershell
+ollama serve
+```
+
+Leave this running in the background while using the app.
+
+### 4 — Configure the model (optional)
+
+Edit `config/config.yaml` to change the model name or endpoint:
+
+```yaml
+llm:
+  enabled: true
+  model: "qwen2.5:14b"          # change to any pulled model
+  endpoint: "http://localhost:11434/api/generate"
+  temperature: 0.1
+  timeout_seconds: 60
+```
+
+### 5 — Use Rewrite Selected Text
+
+1. Dictate and transcribe as normal
+2. Switch to the **✏ Corrected** tab
+3. **Select** the text you want to rewrite
+4. Click **✏ Rewrite Selected Text** (or press `Ctrl+Shift+R`)
+5. Wait for the preview dialog to appear (~5–30 s depending on model)
+6. Review the **Before / After** comparison
+7. Optionally edit the rewritten text in the right pane
+8. Click **✓ Accept Rewrite** to replace the selection, or **✗ Reject** to keep the original
+
+### Undo / Redo
+
+The Corrected panel supports full undo/redo:
+
+| Action | Keyboard | Button |
+|--------|----------|--------|
+| Undo   | `Ctrl+Z` | ↩ Undo |
+| Redo   | `Ctrl+Y` | ↪ Redo |
+
+### Safety rule
+
+The AI model is instructed with a strict system prompt:
+
+> *Rewrite the selected text into clearer formal pathology reporting style using only the facts explicitly present in the selected text. Do not add new findings. Do not infer diagnosis, tumor grade, margin status, stage, or biomarker status. Do not convert uncertain language into definite statements. Return only the rewritten text.*
+
+The model **never** has access to the full patient record — only the text you explicitly select.
+
+---
+
 ## Synchronizing Between Computers
 
 ### First time on a new computer
@@ -143,16 +215,22 @@ Dictation_path/
 |-- terminology_corrector.py    <- dictionary substitution
 |-- clipboard_handler.py        <- clipboard integration
 |-- hotkey_manager.py           <- F9 hotkey
+|-- rewriter.py                 <- GGUF-based whole-text rewriter (llama-cpp)
+|-- ollama_client.py            <- local Ollama HTTP client (stdlib only)
+|-- rewrite_service.py          <- pathology-safe selection rewrite via Ollama
 |-- pathology_dictation_app.py  <- CLI entry point
 |-- create_shortcut.py          <- desktop shortcut creator
 |-- launcher.pyw                <- silent launcher for shortcuts
 |
 |-- config/
-|   |-- config.yaml             <- portable runtime config
+|   |-- config.yaml             <- runtime config (model, LLM, privacy)
 |   `-- pathology_replacements.json  <- terminology dictionary
 |
 |-- data/
 |   `-- pathology_dictionary.json    <- terminology dictionary (JSON)
+|
+|-- models/
+|   `-- rewrite/                <- place .gguf files here for GGUF rewriter
 |
 |-- tools/
 |   |-- verify_offline_ready.py
@@ -172,8 +250,8 @@ Dictation_path/
 > **This app transcribes and corrects dictated text only.**
 > It never diagnoses, infers findings, or adds unstated pathology content.
 
-When AI style-rewriting is added in a future phase, the required instruction will be:
-> *"Rewrite into my reporting style using only dictated facts."*
+The AI rewrite feature enforces this rule at the prompt level:
+> *"Rewrite the selected text into clearer formal pathology reporting style using only the facts explicitly present in the selected text. Do not add new findings. Do not infer diagnosis. Return only the rewritten text."*
 
 ---
 

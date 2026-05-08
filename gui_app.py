@@ -5,6 +5,7 @@ Real-time streaming transcription with live text display.
 
 import sys
 import os
+import re
 import json
 import threading
 import queue
@@ -289,6 +290,269 @@ class TerminologyEditor(tk.Toplevel):
             messagebox.showerror("Save failed", str(e), parent=self)
 
 
+# ── Voice command processor ───────────────────────────────────────────────────
+
+class VoiceCommandProcessor:
+    """
+    Converts spoken command words/phrases into formatting actions.
+
+    Built-in defaults (always active):
+        "enter"          → newline
+        "new line"       → newline
+        "finish case"    → separator line  (***************)
+        "new paragraph"  → blank line
+
+    To add more without editing code:
+        Edit  config/voice_commands.json
+        Format: { "spoken phrase": "output text" }
+        Use \\n for newline inside JSON values.
+
+    Command phrases are matched case-insensitively as whole words.
+    Longer phrases are matched first (so "finish case" wins over "finish").
+    """
+
+    DEFAULT_COMMANDS: dict[str, str] = {
+        "enter":          "\n",
+        "new line":       "\n",
+        "new paragraph":  "\n\n",
+        "finish case":    "\n**************\n",
+    }
+
+    def __init__(self, config_path: Optional[Path] = None):
+        self.commands    = dict(self.DEFAULT_COMMANDS)
+        self.config_path = config_path
+        if config_path and config_path.exists():
+            self._load(config_path)
+        self._pattern = self._compile()
+
+    def reload(self):
+        self.commands = dict(self.DEFAULT_COMMANDS)
+        if self.config_path and self.config_path.exists():
+            self._load(self.config_path)
+        self._pattern = self._compile()
+
+    def _load(self, path: Path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                extra = json.load(f)
+            # decode \\n in JSON values
+            self.commands.update(
+                {k: v.replace("\\n", "\n") for k, v in extra.items()}
+            )
+        except Exception as e:
+            logger.warning(f"voice_commands: could not load {path}: {e}")
+
+    def _compile(self):
+        phrases = sorted(self.commands.keys(), key=len, reverse=True)
+        escaped = [re.escape(p) for p in phrases]
+        pat = r'(?<![A-Za-z])(' + '|'.join(escaped) + r')(?![A-Za-z])'
+        return re.compile(pat, re.IGNORECASE)
+
+    def process(self, text: str) -> tuple:
+        """Return (processed_text, list_of_command_names_applied)."""
+        applied: list[str] = []
+
+        def replace(m):
+            key = m.group(1).lower()
+            applied.append(key)
+            return self.commands.get(key, m.group(1))
+
+        result = self._pattern.sub(replace, text)
+        return result, applied
+
+    def save(self, path: Path):
+        """Save current commands (excluding defaults) to JSON."""
+        data = {
+            k: v.replace("\n", "\\n")
+            for k, v in self.commands.items()
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+# ── Voice command editor ──────────────────────────────────────────────────────
+
+class VoiceCommandEditor(tk.Toplevel):
+
+    def __init__(self, parent, processor: VoiceCommandProcessor, on_save):
+        super().__init__(parent)
+        self.title("Voice Command Editor")
+        self.configure(bg=BG)
+        self.geometry("720x520")
+        self.minsize(560, 380)
+        self.resizable(True, True)
+        self.transient(parent)
+        self.grab_set()
+
+        self._proc    = processor
+        self._on_save = on_save
+        self._data    = {}   # spoken → output (with literal \n stored as \\n for display)
+        self._load_display_data()
+        self._build()
+        self._populate()
+
+    def _load_display_data(self):
+        """Convert newlines to \\n for display in the table."""
+        self._data = {
+            k: v.replace("\n", "\\n")
+            for k, v in self._proc.commands.items()
+        }
+
+    def _build(self):
+        root = ttk.Frame(self, padding=16)
+        root.pack(fill="both", expand=True)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(2, weight=1)
+
+        tk.Label(root, text="Voice Commands",
+                 font=("Segoe UI", 13, "bold"), bg=BG, fg=ACCENT)\
+            .grid(row=0, column=0, sticky="w")
+        tk.Label(root,
+                 text='Say the command word while dictating — it will be replaced by the output.  '
+                      'Use \\n for newline.',
+                 font=FONT_SMALL, bg=BG, fg=TEXT_DIM)\
+            .grid(row=1, column=0, sticky="w", pady=(2, 10))
+
+        tf = tk.Frame(root, bg=BORDER, bd=1)
+        tf.grid(row=2, column=0, sticky="nsew")
+        tf.columnconfigure(0, weight=1)
+        tf.rowconfigure(0, weight=1)
+
+        self._tree = ttk.Treeview(tf, columns=("spoken", "output"),
+                                   show="headings", selectmode="browse")
+        self._tree.heading("spoken", text="You say (during dictation)")
+        self._tree.heading("output", text="Output / formatting")
+        self._tree.column("spoken", width=280, anchor="w", minwidth=160)
+        self._tree.column("output", width=340, anchor="w", minwidth=160)
+
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+        self._tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        s = ttk.Style(self)
+        s.configure("Cmd.Treeview",
+                     background=BG2, foreground=TEXT,
+                     fieldbackground=BG2, rowheight=28,
+                     font=FONT_UI, borderwidth=0)
+        s.configure("Cmd.Treeview.Heading",
+                     background=ACCENT_L, foreground=ACCENT,
+                     font=("Segoe UI", 10, "bold"), relief="flat", padding=6)
+        s.map("Cmd.Treeview",
+              background=[("selected", ACCENT)],
+              foreground=[("selected", "white")])
+        self._tree.configure(style="Cmd.Treeview")
+        self._tree.bind("<Double-1>", self._on_double_click)
+        self._tree.bind("<Delete>",   lambda _: self._delete_row())
+
+        add = tk.Frame(root, bg=BG)
+        add.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        add.columnconfigure(1, weight=1)
+        add.columnconfigure(4, weight=1)
+
+        def lbl(t): return tk.Label(add, text=t, font=FONT_SMALL, bg=BG, fg=TEXT_MED)
+
+        lbl("You say:").grid(row=0, column=0, padx=(0, 6))
+        self._e_spoken = tk.Entry(add, bg=BG2, fg=TEXT, insertbackground=TEXT,
+                                   relief="solid", bd=1, font=FONT_UI,
+                                   highlightthickness=0)
+        self._e_spoken.grid(row=0, column=1, sticky="ew", ipady=5)
+
+        tk.Label(add, text="→", font=("Segoe UI", 12, "bold"),
+                 bg=BG, fg=ACCENT).grid(row=0, column=2, padx=12)
+
+        lbl("Output:").grid(row=0, column=3, padx=(0, 6))
+        self._e_output = tk.Entry(add, bg=BG2, fg=TEXT, insertbackground=TEXT,
+                                   relief="solid", bd=1, font=FONT_UI,
+                                   highlightthickness=0)
+        self._e_output.grid(row=0, column=4, sticky="ew", ipady=5)
+
+        tk.Button(add, text="Add / Update", font=FONT_UI,
+                  bg=ACCENT, fg="white", activebackground=ACCENT_H,
+                  activeforeground="white", relief="flat", bd=0,
+                  padx=14, pady=5, cursor="hand2",
+                  command=self._add_or_update)\
+            .grid(row=0, column=5, padx=(12, 0))
+
+        self._e_spoken.bind("<Return>", lambda _: self._e_output.focus())
+        self._e_output.bind("<Return>", lambda _: self._add_or_update())
+
+        bot = tk.Frame(root, bg=BG)
+        bot.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        bot.columnconfigure(1, weight=1)
+
+        tk.Button(bot, text="🗑  Delete Selected", font=FONT_UI,
+                  bg=RED_SOFT, fg=RED_REC, activebackground="#fcd5d0",
+                  relief="flat", bd=0, padx=12, pady=6, cursor="hand2",
+                  command=self._delete_row).grid(row=0, column=0)
+
+        self._count_lbl = tk.Label(bot, text="", font=FONT_SMALL,
+                                    bg=BG, fg=TEXT_DIM)
+        self._count_lbl.grid(row=0, column=1, padx=14, sticky="w")
+
+        tk.Button(bot, text="✓  Save & Close", font=FONT_UI,
+                  bg=GREEN_OK, fg="white", activebackground="#155f39",
+                  relief="flat", bd=0, padx=16, pady=6, cursor="hand2",
+                  command=self._save_close).grid(row=0, column=2)
+
+        tk.Button(bot, text="Cancel", font=FONT_UI,
+                  bg=BG3, fg=TEXT_MED, activebackground=BORDER,
+                  relief="flat", bd=0, padx=14, pady=6, cursor="hand2",
+                  command=self.destroy).grid(row=0, column=3, padx=(8, 0))
+
+    def _populate(self):
+        for row in self._tree.get_children():
+            self._tree.delete(row)
+        for spoken, output in sorted(self._data.items()):
+            self._tree.insert("", "end", values=(spoken, output))
+        self._count_lbl.config(text=f"{len(self._data)} commands")
+
+    def _add_or_update(self):
+        spoken = self._e_spoken.get().strip().lower()
+        output = self._e_output.get().strip()
+        if not spoken or not output:
+            messagebox.showwarning("Empty field", "Both fields are required.", parent=self)
+            return
+        self._data[spoken] = output
+        self._populate()
+        self._e_spoken.delete(0, "end")
+        self._e_output.delete(0, "end")
+        self._e_spoken.focus()
+
+    def _delete_row(self):
+        sel = self._tree.selection()
+        if not sel:
+            return
+        spoken = self._tree.item(sel[0], "values")[0]
+        if messagebox.askyesno("Delete", f"Remove command  '{spoken}'?", parent=self):
+            self._data.pop(spoken, None)
+            self._populate()
+
+    def _on_double_click(self, _=None):
+        sel = self._tree.selection()
+        if not sel:
+            return
+        spoken, output = self._tree.item(sel[0], "values")
+        self._e_spoken.delete(0, "end"); self._e_spoken.insert(0, spoken)
+        self._e_output.delete(0, "end"); self._e_output.insert(0, output)
+        self._e_output.focus()
+
+    def _save_close(self):
+        try:
+            # Update processor commands (convert \\n back to real newlines)
+            self._proc.commands = {
+                k: v.replace("\\n", "\n")
+                for k, v in self._data.items()
+            }
+            self._proc._pattern = self._proc._compile()
+            if self._proc.config_path:
+                self._proc.save(self._proc.config_path)
+            self._on_save()
+            self.destroy()
+        except Exception as e:
+            messagebox.showerror("Save failed", str(e), parent=self)
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
@@ -300,7 +564,7 @@ class App(tk.Tk):
         self.minsize(720, 580)
         self.geometry("900x720")
 
-        _icon = Path(__file__).parent / "app_icon.ico"
+        _icon = Path(__file__).parent / "app_icon (2).ico"
         if _icon.exists():
             try:
                 self.iconbitmap(str(_icon))
@@ -319,6 +583,10 @@ class App(tk.Tk):
         self._cursor_on    = False
         self._rec_t0       = 0.0
         self._font_size    = FONT_SIZE_DEFAULT
+
+        # Voice commands processor
+        _vc_path = Path(__file__).parent / "config" / "voice_commands.json"
+        self._voice_cmd = VoiceCommandProcessor(config_path=_vc_path)
 
         self._style()
         self._build()
@@ -535,25 +803,26 @@ class App(tk.Tk):
             b.grid(row=0, column=col, padx=(0, 2), pady=6)
             return b
 
-        btn(0,  "📖  Terminology",    self._open_editor,   fg=ACCENT, bold=True)
-        btn(1,  "📋  Copy",           self._copy_result)
-        self._save_btn = btn(2, "💾  Save ▼", self._show_save_menu)
-        btn(3,  "✕  Clear",           self._clear_all,    fg=TEXT_DIM, padx=10)
+        btn(0,  "📖  Terminology",    self._open_editor,       fg=ACCENT, bold=True)
+        btn(1,  "🎙  Voice Cmds",    self._open_voice_editor, fg=ACCENT)
+        btn(2,  "📋  Copy",           self._copy_result)
+        self._save_btn = btn(3, "💾  Save ▼", self._show_save_menu)
+        btn(4,  "✕  Clear",           self._clear_all,        fg=TEXT_DIM, padx=10)
 
         # Thin vertical divider
-        tk.Frame(bar, bg=BORDER, width=1).grid(row=0, column=10,
+        tk.Frame(bar, bg=BORDER, width=1).grid(row=0, column=11,
                                                 padx=(10, 8), sticky="ns", pady=8)
 
         # Font size controls
         tk.Label(bar, text="Text size:", font=FONT_SMALL,
                  bg=BG2, fg=TEXT_DIM)\
-            .grid(row=0, column=11, padx=(0, 6))
-        btn(12, "A−", self._font_down, padx=10)
+            .grid(row=0, column=12, padx=(0, 6))
+        btn(13, "A−", self._font_down, padx=10)
         self._size_lbl = tk.Label(bar, text=str(self._font_size), width=3,
                                    font=("Segoe UI", 10, "bold"),
                                    bg=BG2, fg=TEXT_MED, anchor="center")
-        self._size_lbl.grid(row=0, column=13)
-        btn(14, "A+", self._font_up, padx=10)
+        self._size_lbl.grid(row=0, column=14)
+        btn(15, "A+", self._font_up, padx=10)
 
         # Spacer
         tk.Frame(bar, bg=BG2).grid(row=0, column=98, sticky="ew")
@@ -648,6 +917,12 @@ class App(tk.Tk):
                 n = len(self._corrector.replacements)
                 self._set_status(f"Dictionary reloaded  ·  {n} entries", GREEN_OK)
         TerminologyEditor(self, self.cfg.dictionary_path, _reload)
+
+    def _open_voice_editor(self):
+        def _reload():
+            n = len(self._voice_cmd.commands)
+            self._set_status(f"Voice commands saved  ·  {n} commands active", GREEN_OK)
+        VoiceCommandEditor(self, self._voice_cmd, _reload)
 
     # ── Font size ─────────────────────────────────────────────────────────────
 
@@ -770,7 +1045,8 @@ class App(tk.Tk):
     def _start_recording(self):
         self.is_recording = True
         self._live_text   = ""
-        self._clear_all()
+        # Clear only the live preview box; orig/corr boxes persist until Clear is pressed
+        self._write_box(self._live_box, "")
         self._nb.select(0)
 
         self._rec_btn.config(
@@ -843,8 +1119,9 @@ class App(tk.Tk):
                 )
                 text = " ".join(s.text for s in segs).strip()
                 if text:
-                    self._live_text = text
-                    self._ui_q.put(("live", text))
+                    live_text, _ = self._voice_cmd.process(text)
+                    self._live_text = live_text
+                    self._ui_q.put(("live", live_text))
             except Exception as e:
                 logger.debug(f"stream: {e}")
             finally:
@@ -863,14 +1140,18 @@ class App(tk.Tk):
             if not raw:
                 self._ui_q.put(("status", "Nothing detected — please try again", RED_REC))
                 return
-            corrected, changes = self._corrector.correct_with_logging(raw)
+            # Apply voice commands first, then terminology correction
+            raw_after_vc, vc_applied = self._voice_cmd.process(raw)
+            corrected, changes = self._corrector.correct_with_logging(raw_after_vc)
             ClipboardHandler.copy_to_clipboard(corrected)
-            self._ui_q.put(("final", raw, corrected, changes))
+            self._ui_q.put(("final", raw, corrected, changes, vc_applied))
             n = len(changes)
-            self._ui_q.put((
-                "status",
-                f"Done  ·  {n} correction{'s' if n != 1 else ''} applied  ·  copied to clipboard",
-                GREEN_OK))
+            v = len(vc_applied)
+            status_parts = [f"Done  ·  {n} correction{'s' if n!=1 else ''} applied"]
+            if v:
+                status_parts.append(f"{v} voice command{'s' if v!=1 else ''}")
+            status_parts.append("copied to clipboard")
+            self._ui_q.put(("status", "  ·  ".join(status_parts), GREEN_OK))
         except Exception as e:
             logger.error(f"finalize: {e}", exc_info=True)
             self._ui_q.put(("status", f"Error: {e}", RED_REC))
@@ -914,20 +1195,25 @@ class App(tk.Tk):
                         cur = "▌" if self._cursor_on else " "
                         self._write_live(m[1] + cur, TEXT_LIVE)
                 elif op == "final":
-                    _, raw, corrected, changes = m
+                    _, raw, corrected, changes, vc_applied = m
                     self._write_box(self._live_box, corrected, TEXT)
-                    self._write_box(self._orig_box, raw,       TEXT)
-                    self._write_box(self._corr_box, corrected, TEXT)
+                    self._append_box(self._orig_box, raw,       TEXT)
+                    self._append_box(self._corr_box, corrected, TEXT)
                     self._nb.select(2)
+                    parts = []
+                    if vc_applied:
+                        parts.append("  Voice cmds: " +
+                                     ", ".join(f"[{c}]" for c in vc_applied))
                     if changes:
-                        self._changes_lbl.config(
-                            text="  Corrections applied:  " +
-                                 "   ·   ".join(
-                                     f"'{c['original']}' → '{c['replacement']}'"
-                                     for c in changes))
+                        parts.append("  Corrections: " +
+                                     "   ·   ".join(
+                                         f"'{c['original']}' → '{c['replacement']}'"
+                                         for c in changes))
+                    if parts:
+                        self._changes_lbl.config(text="   ".join(parts))
                     else:
                         self._changes_lbl.config(
-                            text="  No terminology corrections applied.")
+                            text="  No voice commands or terminology corrections applied.")
                 elif op == "msgbox":
                     _, lvl, title, txt = m
                     (messagebox.showerror if lvl == "error"
@@ -956,6 +1242,23 @@ class App(tk.Tk):
             box.insert("end", text)
             box.tag_add("c", "1.0", "end")
             box.tag_config("c", foreground=color)
+        box.config(state="disabled")
+
+    def _append_box(self, box, text: str, color=TEXT):
+        """Append text to box, adding a separator if content already exists."""
+        box.config(state="normal")
+        existing = box.get("1.0", "end").strip()
+        if existing:
+            sep_idx = box.index("end-1c")
+            box.insert("end", "\n\n― ― ―\n\n")   # ― ― ―
+            box.tag_add("sep", sep_idx, box.index("end"))
+            box.tag_config("sep", foreground=TEXT_DIM)
+        if text:
+            start_idx = box.index("end-1c")
+            box.insert("end", text)
+            box.tag_add("new", start_idx, box.index("end"))
+            box.tag_config("new", foreground=color)
+        box.see("end")
         box.config(state="disabled")
 
     def _set_status(self, text: str, color=TEXT_DIM):

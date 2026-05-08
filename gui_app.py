@@ -970,7 +970,8 @@ class App(tk.Tk):
 
         self._rewrite_sel_btn = tbtn(
             "✏  Rewrite Selected Text   Ctrl+Shift+R",
-            self._rewrite_selected, fg=ACCENT)
+            self._rewrite_selected, fg=ACCENT,
+            state="disabled")   # enabled once Ollama startup check passes
 
         # Right-side hint
         tk.Label(bar,
@@ -1157,7 +1158,11 @@ class App(tk.Tk):
     # ── Ollama rewrite selected text ──────────────────────────────────────────
 
     def _init_ollama(self):
-        """Initialise the Ollama rewrite service from config.  Silent on failure."""
+        """
+        Initialise the Ollama rewrite service (no network call here).
+        Launches a background thread to check / auto-start Ollama and
+        update the rewrite button state once the result is known.
+        """
         cfg = self.cfg.llm
         if not cfg.enabled:
             logger.info("LLM rewrite disabled in config")
@@ -1173,10 +1178,96 @@ class App(tk.Tk):
                 temperature = cfg.temperature,
                 max_tokens  = cfg.max_tokens,
             )
-            logger.info(f"Ollama rewrite service ready: {cfg.model} @ {cfg.endpoint}")
+            logger.info(f"Ollama service object created: {cfg.model} @ {cfg.endpoint}")
         except Exception as e:
-            logger.warning(f"Could not initialise Ollama service: {e}")
+            logger.warning(f"Could not create Ollama service: {e}")
             self._rewrite_svc = None
+            return
+
+        # Run startup check in background — does not block the GUI
+        threading.Thread(
+            target = self._check_ollama_startup,
+            daemon = True,
+            name   = "ollama-startup",
+        ).start()
+
+    def _check_ollama_startup(self):
+        """
+        Background thread: check whether Ollama is running; auto-start if not.
+        Posts all results to _ui_q — never touches widgets directly.
+
+        Queue messages posted:
+          ("ollama_foot",   text, color)     — update footer label only
+          ("ollama_status", state, detail)   — final result:
+              state = "ready"       detail = model name
+              state = "no_model"    detail = model name
+              state = "unavailable" detail = human-readable reason
+        """
+        cfg    = self.cfg.llm
+        client = self._rewrite_svc.client   # never None at this point
+
+        self._ui_q.put(("ollama_foot", "Ollama: checking…", TEXT_DIM))
+
+        # ── Step 1: Already running? ──────────────────────────────────────────
+        if client.is_ollama_running():
+            logger.info("Ollama already running")
+            self._finish_ollama_check(client, cfg)
+            return
+
+        # ── Step 2: Auto-start ────────────────────────────────────────────────
+        if not cfg.auto_start_ollama:
+            msg = (
+                "Ollama is not running.  Dictation still works, but "
+                "Qwen rewrite is unavailable.\n\n"
+                "Start Ollama manually:\n  ollama serve"
+            )
+            self._ui_q.put(("ollama_status", "unavailable", msg))
+            return
+
+        self._ui_q.put(("ollama_foot", "Ollama: starting…", AMBER))
+        logger.info("Ollama not detected — attempting auto-start")
+
+        launched = client.start_ollama(cfg.ollama_start_command)
+        if not launched:
+            msg = (
+                "Could not start Ollama automatically.\n\n"
+                "Dictation still works, but Qwen rewrite is unavailable.\n\n"
+                "Install Ollama from https://ollama.ai\n"
+                "then start it with:  ollama serve"
+            )
+            self._ui_q.put(("ollama_status", "unavailable", msg))
+            return
+
+        # ── Step 3: Wait until ready ──────────────────────────────────────────
+        self._ui_q.put(("ollama_foot",
+                         f"Ollama: waiting (up to {cfg.startup_wait_seconds} s)…",
+                         AMBER))
+        ready = client.wait_until_ready(
+            timeout  = cfg.startup_wait_seconds,
+            interval = cfg.startup_retry_interval_seconds,
+        )
+        if not ready:
+            msg = (
+                f"Ollama was started but did not respond within "
+                f"{cfg.startup_wait_seconds} s.\n\n"
+                "Dictation still works, but Qwen rewrite is unavailable.\n\n"
+                "Try starting Ollama manually:\n  ollama serve"
+            )
+            self._ui_q.put(("ollama_status", "unavailable", msg))
+            return
+
+        logger.info("Ollama became ready after auto-start")
+        self._finish_ollama_check(client, cfg)
+
+    def _finish_ollama_check(self, client, cfg):
+        """Called (from background thread) when Ollama is confirmed running."""
+        ok, msg = client.check_status()
+        if ok:
+            logger.info(f"Ollama model ready: {cfg.model}")
+            self._ui_q.put(("ollama_status", "ready", cfg.model))
+        else:
+            logger.warning(f"Ollama running but model unavailable: {msg}")
+            self._ui_q.put(("ollama_status", "no_model", cfg.model))
 
     def _rewrite_selected(self):
         """
@@ -1576,6 +1667,40 @@ class App(tk.Tk):
                     messagebox.showerror("Rewrite failed", msg, parent=self)
                 elif op == "rewrite_sel_enable":
                     self._rewrite_sel_btn.config(state="normal")
+                elif op == "ollama_foot":
+                    # Update footer label only — does not overwrite main status
+                    _, text, color = m
+                    self._foot.config(text=text, fg=color)
+                elif op == "ollama_status":
+                    # Final result of the Ollama startup check
+                    _, state, detail = m
+                    if state == "ready":
+                        self._rewrite_sel_btn.config(state="normal")
+                        self._foot.config(
+                            text=f"Ollama: {detail}  ✓", fg=GREEN_OK)
+                    elif state == "no_model":
+                        # Ollama is running but model not pulled
+                        self._rewrite_sel_btn.config(state="disabled")
+                        self._foot.config(
+                            text=f"Ollama: '{detail}' not installed — run: "
+                                 f"ollama pull {detail}",
+                            fg=AMBER)
+                        messagebox.showwarning(
+                            "Qwen model not installed",
+                            f"Ollama is running, but '{detail}' is not installed.\n\n"
+                            f"Pull it with:\n  ollama pull {detail}\n\n"
+                            "Dictation works normally.\n"
+                            "The Rewrite feature will be unavailable until the "
+                            "model is installed.",
+                            parent=self)
+                    elif state == "unavailable":
+                        # Not running and could not be started
+                        self._rewrite_sel_btn.config(state="disabled")
+                        self._foot.config(
+                            text="Ollama unavailable — rewrite disabled  "
+                                 "(dictation works normally)",
+                            fg=AMBER)
+                        logger.info(f"Ollama unavailable at startup: {detail}")
                 elif op == "msgbox":
                     _, lvl, title, txt = m
                     (messagebox.showerror if lvl == "error"

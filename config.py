@@ -57,13 +57,18 @@ class UIConfig:
 @dataclass
 class LLMConfig:
     """Local LLM rewrite configuration (Ollama)."""
-    enabled:          bool  = True
-    provider:         str   = "ollama"
-    endpoint:         str   = "http://localhost:11434"
-    model:            str   = "qwen2.5:14b"
-    temperature:      float = 0.1
-    max_tokens:       int   = 512
-    timeout_seconds:  int   = 60
+    enabled:                      bool  = True
+    provider:                     str   = "ollama"
+    endpoint:                     str   = "http://localhost:11434"
+    model:                        str   = "qwen2.5:14b"
+    temperature:                  float = 0.1
+    max_tokens:                   int   = 512
+    timeout_seconds:              int   = 60
+    # Auto-start settings
+    auto_start_ollama:            bool  = True
+    ollama_start_command:         str   = "ollama serve"
+    startup_wait_seconds:         int   = 30
+    startup_retry_interval_seconds: int = 2
 
 
 class PathologyDictationConfig:
@@ -130,22 +135,43 @@ class PathologyDictationConfig:
         """Parse the 'llm:' block from config.yaml and update self.llm."""
         try:
             import yaml
+            import urllib.parse as _up
             with open(yaml_path, encoding="utf-8") as f:
                 y = yaml.safe_load(f) or {}
             llm = y.get("llm", {})
             if not llm:
                 return
-            self.llm.enabled         = bool(llm.get("enabled",         self.llm.enabled))
-            self.llm.provider        = str( llm.get("provider",        self.llm.provider))
-            # endpoint: accept full URL (with path) or just base — strip path
-            ep = str(llm.get("endpoint", self.llm.endpoint))
-            import urllib.parse
-            parsed = urllib.parse.urlparse(ep)
-            self.llm.endpoint        = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else ep
+
+            self.llm.enabled  = bool(llm.get("enabled",  self.llm.enabled))
+            self.llm.provider = str( llm.get("provider", self.llm.provider))
+
+            # endpoint: accept full URL (with path) or just base — normalise to
+            # scheme+host so OllamaClient can derive /api/generate and /api/tags.
+            ep     = str(llm.get("endpoint", self.llm.endpoint))
+            parsed = _up.urlparse(ep)
+            if parsed.netloc:
+                self.llm.endpoint = f"{parsed.scheme}://{parsed.netloc}"
+            elif ":" in ep:          # bare  host:port  without scheme
+                self.llm.endpoint = f"http://{ep}"
+            else:
+                self.llm.endpoint = ep
+
             self.llm.model           = str(  llm.get("model",           self.llm.model))
             self.llm.temperature     = float(llm.get("temperature",     self.llm.temperature))
             self.llm.max_tokens      = int(  llm.get("max_tokens",      self.llm.max_tokens))
             self.llm.timeout_seconds = int(  llm.get("timeout_seconds", self.llm.timeout_seconds))
+
+            # Auto-start settings
+            self.llm.auto_start_ollama  = bool(llm.get(
+                "auto_start_ollama",  self.llm.auto_start_ollama))
+            self.llm.ollama_start_command = str(llm.get(
+                "ollama_start_command", self.llm.ollama_start_command))
+            self.llm.startup_wait_seconds = int(llm.get(
+                "startup_wait_seconds", self.llm.startup_wait_seconds))
+            self.llm.startup_retry_interval_seconds = int(llm.get(
+                "startup_retry_interval_seconds",
+                self.llm.startup_retry_interval_seconds))
+
         except Exception as exc:
             print(f"[config] Warning: could not load LLM config: {exc}")
 

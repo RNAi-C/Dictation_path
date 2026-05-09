@@ -1219,11 +1219,13 @@ UNDO / REDO
         self._nb = ttk.Notebook(wrap)
         self._nb.grid(row=0, column=0, sticky="nsew")
 
+        # Live tab — readonly streaming preview
         self._live_box = self._textbox(self._nb)
         self._nb.add(self._live_box, text="  🎙  Live  ")
 
         self._corr_box = self._editable_textbox(self._nb)
         self._nb.add(self._corr_box, text="  ✏  Corrected  ")
+
         self._nb.select(0)
 
         # Dirty-state tracking and redo shortcut
@@ -1281,6 +1283,54 @@ UNDO / REDO
         tk.Label(bar,
                  text="✎ Corrected tab is editable — "
                       "click to place cursor, then dictate to insert there",
+                 font=("Segoe UI", 9), bg=BG2, fg=TEXT_DIM)\
+            .pack(side="right", padx=(0, 6))
+
+    def _editable_textbox(self, parent) -> scrolledtext.ScrolledText:
+        """Textbox that stays editable — undo/redo enabled, user can type freely."""
+        return scrolledtext.ScrolledText(
+            parent, wrap="word",
+            font=("Segoe UI", self._font_size),
+            height=1,
+            bg="#F7FFFE", fg=TEXT, insertbackground=ACCENT,
+            relief="flat", bd=0, padx=14, pady=12,
+            selectbackground=ACCENT_L, selectforeground=TEXT,
+            undo=True, maxundo=200,
+            state="normal"
+        )
+
+    def _build_edit_toolbar(self, parent):
+        """
+        Compact toolbar below the notebook tabs.
+        Contains: Undo · Redo | Rewrite Selected Text
+        This toolbar only operates on the Corrected (editable) panel.
+        """
+        bar = tk.Frame(parent, bg=BG2)
+        bar.grid(row=1, column=0, sticky="ew", pady=(5, 0))
+
+        def tbtn(text, cmd, fg=TEXT_MED, **kw):
+            b = tk.Button(bar, text=text, font=("Segoe UI", 9),
+                          bg=BG2, fg=fg,
+                          activebackground=ACCENT_L, activeforeground=ACCENT,
+                          relief="flat", bd=0, padx=10, pady=4,
+                          cursor="hand2", command=cmd, **kw)
+            b.pack(side="left", padx=(0, 2))
+            return b
+
+        tbtn("↩  Undo  Ctrl+Z", self._undo)
+        tbtn("↪  Redo  Ctrl+Y", self._redo)
+
+        tk.Frame(bar, bg=BORDER, width=1)\
+            .pack(side="left", fill="y", padx=(8, 8), pady=3)
+
+        self._rewrite_sel_btn = tbtn(
+            "✏  Rewrite Selected Text   Ctrl+Shift+R",
+            self._rewrite_selected, fg=ACCENT,
+            state="disabled")   # enabled once Ollama startup check passes
+
+        # Right-side hint
+        tk.Label(bar,
+                 text="✎ Corrected tab is editable — type freely or rewrite selection with AI",
                  font=("Segoe UI", 9), bg=BG2, fg=TEXT_DIM)\
             .pack(side="right", padx=(0, 6))
 
@@ -1856,6 +1906,7 @@ UNDO / REDO
     # ── Save / Export ─────────────────────────────────────────────────────────
 
     def _current_text(self) -> str:
+        """Return best available text: corrected > live."""
         t = self._corr_box.get("1.0", "end").strip()
         if not t:
             t = self._live_box.get("1.0", "end").strip()
@@ -2246,6 +2297,87 @@ UNDO / REDO
         self._update_title()
 
     # ── Close ─────────────────────────────────────────────────────────────────
+
+    # ── AI rewrite ────────────────────────────────────────────────────────────
+
+    def _populate_rewrite_models(self):
+        """Scan models/rewrite/ for .gguf files and populate the combobox."""
+        try:
+            models = scan_models(self.cfg.models_dir)
+        except Exception:
+            models = []
+        if models:
+            names = [m.name for m in models]
+            self._rewr_model_cb.configure(values=names)
+            # Keep current selection if still valid, else pick first
+            if self._rewr_model_var.get() not in names:
+                self._rewr_model_var.set(names[0])
+            self._rewrite_btn.config(state="normal")
+        else:
+            self._rewr_model_cb.configure(values=["No models found"])
+            self._rewr_model_var.set("No models found")
+            self._rewrite_btn.config(state="disabled")
+
+    def _rewrite(self):
+        """Start AI rewrite of the Corrected text in a background thread."""
+        text = self._corr_box.get("1.0", "end").strip()
+        if not text:
+            messagebox.showwarning(
+                "Nothing to rewrite",
+                "Dictate and correct something first.",
+                parent=self)
+            return
+
+        model_name = self._rewr_model_var.get()
+        if not model_name or model_name == "No models found":
+            messagebox.showinfo(
+                "No rewrite model found",
+                "Place a .gguf model file in:\n"
+                f"  {self.cfg.models_dir / 'rewrite'}\n\n"
+                "Supported models (Q4_K_M GGUF format):\n"
+                "  • Qwen2.5-1.5B-Instruct-Q4_K_M.gguf  (~0.9 GB)\n"
+                "  • Qwen2.5-3B-Instruct-Q4_K_M.gguf    (~1.8 GB)\n"
+                "  • Phi-3.5-mini-instruct-Q4_K_M.gguf  (~2.2 GB)\n"
+                "  • Llama-3.2-1B-Instruct-Q4_K_M.gguf  (~0.7 GB)\n\n"
+                "Download from HuggingFace — see README.",
+                parent=self)
+            return
+
+        # Check llama-cpp-python is available before launching thread
+        avail, msg = LocalRewriter.check_available()
+        if not avail:
+            messagebox.showerror("llama-cpp-python not installed", msg, parent=self)
+            return
+
+        model_path = self.cfg.models_dir / "rewrite" / model_name
+        self._rewrite_btn.config(state="disabled")
+        self._set_status(
+            f"Loading  {model_name}…  (first run may take 10–30 s)", AMBER)
+        threading.Thread(
+            target=self._rewrite_bg, args=(text, model_path), daemon=True
+        ).start()
+
+    def _rewrite_bg(self, text: str, model_path: Path):
+        """Background worker: load GGUF model if needed, then rewrite."""
+        try:
+            # Load or swap model (unload old if different)
+            if self._rewriter is None or self._rewriter.model_path != model_path:
+                if self._rewriter and self._rewriter.is_loaded():
+                    self._rewriter.unload()
+                self._rewriter = LocalRewriter(model_path)
+                self._rewriter.load()
+
+            self._ui_q.put(("status", "Rewriting text…", AMBER))
+            result = self._rewriter.rewrite(text)
+            self._ui_q.put(("rewrite_done", result))
+            self._ui_q.put(("status",
+                             "Rewrite complete  ·  appended to  ✏ Corrected  tab", GREEN_OK))
+        except Exception as e:
+            logger.error(f"rewrite_bg: {e}", exc_info=True)
+            self._ui_q.put(("status", f"Rewrite error: {e}", RED_REC))
+            self._ui_q.put(("msgbox", "error", "Rewrite failed", str(e)))
+        finally:
+            self._ui_q.put(("rewrite_btn_enable", True))
 
     def _on_close(self):
         if self._doc_dirty:

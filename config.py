@@ -236,6 +236,56 @@ class PathologyDictationConfig:
         except Exception as exc:
             print(f"[config] Warning: could not load LLM config: {exc}")
 
+        # Always load LLM (and privacy) config from config.yaml when present —
+        # works in both dev and portable mode.
+        yaml_path = self.config_dir / "config.yaml"
+        if yaml_path.exists():
+            self._load_llm_from_yaml(yaml_path)
+
+    def _load_llm_from_yaml(self, yaml_path: Path) -> None:
+        """Parse the 'llm:' block from config.yaml and update self.llm."""
+        try:
+            import yaml
+            import urllib.parse as _up
+            with open(yaml_path, encoding="utf-8") as f:
+                y = yaml.safe_load(f) or {}
+            llm = y.get("llm", {})
+            if not llm:
+                return
+
+            self.llm.enabled  = bool(llm.get("enabled",  self.llm.enabled))
+            self.llm.provider = str( llm.get("provider", self.llm.provider))
+
+            # endpoint: accept full URL (with path) or just base — normalise to
+            # scheme+host so OllamaClient can derive /api/generate and /api/tags.
+            ep     = str(llm.get("endpoint", self.llm.endpoint))
+            parsed = _up.urlparse(ep)
+            if parsed.netloc:
+                self.llm.endpoint = f"{parsed.scheme}://{parsed.netloc}"
+            elif ":" in ep:          # bare  host:port  without scheme
+                self.llm.endpoint = f"http://{ep}"
+            else:
+                self.llm.endpoint = ep
+
+            self.llm.model           = str(  llm.get("model",           self.llm.model))
+            self.llm.temperature     = float(llm.get("temperature",     self.llm.temperature))
+            self.llm.max_tokens      = int(  llm.get("max_tokens",      self.llm.max_tokens))
+            self.llm.timeout_seconds = int(  llm.get("timeout_seconds", self.llm.timeout_seconds))
+
+            # Auto-start settings
+            self.llm.auto_start_ollama  = bool(llm.get(
+                "auto_start_ollama",  self.llm.auto_start_ollama))
+            self.llm.ollama_start_command = str(llm.get(
+                "ollama_start_command", self.llm.ollama_start_command))
+            self.llm.startup_wait_seconds = int(llm.get(
+                "startup_wait_seconds", self.llm.startup_wait_seconds))
+            self.llm.startup_retry_interval_seconds = int(llm.get(
+                "startup_retry_interval_seconds",
+                self.llm.startup_retry_interval_seconds))
+
+        except Exception as exc:
+            print(f"[config] Warning: could not load LLM config: {exc}")
+
     def _apply_yaml(self, yaml_path: Path, portable_root: Path) -> None:
         """Apply config.yaml overrides (portable mode only)."""
         try:

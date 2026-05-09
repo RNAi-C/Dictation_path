@@ -327,13 +327,13 @@ Write-Step "Phase 7 - Whisper model (faster-whisper-${Model})"
 New-Item -ItemType Directory -Path $ModelDir -Force | Out-Null
 
 $dlPy = @"
-import sys, os
+import sys, os, warnings
+warnings.filterwarnings('ignore')
 os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
 try:
     from huggingface_hub import snapshot_download
     snapshot_download(
         repo_id=sys.argv[2], local_dir=sys.argv[1],
-        local_dir_use_symlinks=False,
         ignore_patterns=['*.msgpack','*.h5','flax_model*','tf_model*','rust_model*','onnx/*'],
     )
     print('MODEL_OK')
@@ -345,8 +345,12 @@ $dlScript = Join-Path $env:TEMP "pd_dl_model.py"
 Set-Content $dlScript $dlPy -Encoding UTF8
 
 Write-Host "   Downloading $HFRepo  (this may take several minutes)..." -ForegroundColor Gray
+# Temporarily relax error preference so native-exe stderr doesn't abort the script
+$_prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $VenvPy $dlScript $ModelDir $HFRepo 2>&1 | Out-Null
 $dlOK = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $_prevEAP
 
 if (-not $dlOK) {
     Write-Warn "Online download failed - checking local HF cache..."
@@ -375,9 +379,12 @@ if (-not $dlOK) {
 }
 
 if ($dlOK) {
-    # Validate
-    $required = @("model.bin", "config.json", "tokenizer.json", "vocabulary.json")
-    $missing  = $required | Where-Object { -not (Test-Path (Join-Path $ModelDir $_)) }
+    # Validate — vocabulary file can be .json (older models) or .txt (newer models)
+    $hasVocab = (Test-Path (Join-Path $ModelDir "vocabulary.json")) -or
+                (Test-Path (Join-Path $ModelDir "vocabulary.txt"))
+    $required = @("model.bin", "config.json", "tokenizer.json")
+    $missing  = @($required | Where-Object { -not (Test-Path (Join-Path $ModelDir $_)) })
+    if (-not $hasVocab) { $missing += "vocabulary.json/txt" }
     if ($missing.Count -eq 0) {
         Write-OK "Model OK - all required files present"
         Write-OK "Model size: $('{0:N1}' -f (Get-DirMB $ModelDir)) MB"

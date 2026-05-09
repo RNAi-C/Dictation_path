@@ -64,8 +64,12 @@ def check_model(models_dir: Path) -> bool:
     for d in models_dir.iterdir():
         if not d.is_dir():
             continue
-        required = ["model.bin", "config.json", "tokenizer.json", "vocabulary.json"]
+        # vocabulary file can be .json (older models) or .txt (newer models)
+        has_vocab = (d / "vocabulary.json").exists() or (d / "vocabulary.txt").exists()
+        required = ["model.bin", "config.json", "tokenizer.json"]
         missing  = [f for f in required if not (d / f).exists()]
+        if not has_vocab:
+            missing.append("vocabulary.json or vocabulary.txt")
         if not missing:
             ok(f"Model: {d.name}  (all required files present)")
             return True

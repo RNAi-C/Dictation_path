@@ -1,0 +1,6 @@
+{
+  "enter":         "\\n",
+  "new line":      "\\n",
+  "new paragraph": "\\n\\n",
+  "finish case":   "\\n**************\\n"
+}

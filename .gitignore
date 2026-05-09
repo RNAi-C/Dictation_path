@@ -64,6 +64,7 @@ reports/
 # ── Local config overrides and secrets ────────────────────────────────────────
 local_settings.yaml
 local_settings.json
+config/user_settings.json
 credentials/
 .env
 secrets.yaml

@@ -55,3 +55,50 @@ case_sensitive: false
 # ── UI ─────────────────────────────────────────────────────────────────────────
 show_transcription_live: true
 auto_copy_to_clipboard: true
+
+# ── Local LLM (Ollama) — AI rewrite selected text ──────────────────────────────
+# Requires Ollama running locally.  No data leaves this computer.
+#
+# Setup:
+#   1. Install Ollama:  https://ollama.ai
+#   2. Pull model:      ollama pull qwen2.5:14b
+#   3. Start server:    ollama serve
+#   4. Restart this app
+#
+# Change 'model' to any pulled model, e.g.:
+#   qwen2.5:7b    (faster, ~4 GB)
+#   qwen2.5:14b   (default — good balance, ~8 GB)
+#   qwen2.5:32b   (best quality, ~20 GB, GPU recommended)
+llm:
+  enabled: true
+  provider: ollama
+
+  # Base URL — the app derives /api/generate and /api/tags automatically.
+  endpoint: "http://localhost:11434"
+
+  # Model to use for rewriting.  Must be pulled with  ollama pull <model>.
+  model: "qwen2.5:14b"
+
+  # Automatically try to start Ollama when the app launches.
+  # Set to false to disable auto-start (Ollama must be started manually).
+  auto_start_ollama: true
+
+  # Shell command used to start Ollama (must be in PATH or full path).
+  ollama_start_command: "ollama serve"
+
+  # How long to wait for Ollama to become ready after auto-start (seconds).
+  startup_wait_seconds: 30
+
+  # How often to re-check during the wait period (seconds).
+  startup_retry_interval_seconds: 2
+
+  # Generation parameters
+  temperature: 0.1
+  max_tokens: 512
+  timeout_seconds: 120
+
+# ── Privacy ─────────────────────────────────────────────────────────────────────
+privacy:
+  offline_only: true
+  log_transcripts_by_default: false
+  log_llm_requests: false

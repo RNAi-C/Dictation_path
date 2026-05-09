@@ -1,6 +1,63 @@
-# Pathology Dictation Assistant
+# Pathology Dictation Assistant — PathDictate
 
 A **local, offline, privacy-first** speech-to-text assistant for pathology report dictation.
+
+---
+
+## Release Notes
+
+### v0.2.1 — 2026-05-09
+
+**Local model folder selection**
+- New *Browse Model…* button and folder-picker dialog to select any local `faster-whisper` model directory
+- Model status indicator: loading / loaded / missing / error shown in the header at all times
+- Selected path is persisted in `config/user_settings.json` and restored on next launch
+- If the model folder is missing at startup the app opens with dictation disabled and prompts the user to select a valid folder
+- Relative paths (e.g. `./models/faster-whisper-small`) are resolved relative to the app root — no hardcoded machine paths
+
+**Open / Save draft workflow**
+- *File* menu and toolbar buttons: **New Draft**, **Open**, **Save**, **Save As**, **Export .docx**
+- Save writes `.txt`; Save As opens a picker defaulting to `PathDictate_Draft_YYYYMMDD_HHMMSS.txt`
+- Window title and status bar always reflect the current file name and unsaved-changes state (`*`)
+- Opening a file does **not** send text to Ollama — no automatic rewrites
+
+**Autosave**
+- Draft content is silently saved every 60 s to `autosave/PathDictate_autosave.txt`
+- Autosave can be toggled from the *File* menu; state persists across sessions
+
+**Continue dictation at cursor**
+- Transcribed text is inserted at the current cursor position in the Corrected panel
+- Dictating at the end of a document appends with a separator; dictating mid-document inserts inline with no separator
+- Cursor is scrolled into view after each insertion
+
+**Undo / Redo**
+- Full undo/redo stack in the Corrected panel (`Ctrl+Z` / `Ctrl+Y`, also toolbar buttons)
+
+**Improved button styling**
+- All action buttons use a tactile raised/hover/press style with colour-coded palettes (record = red, save = green, rewrite = blue, etc.)
+
+**Selected-text Qwen rewrite (Ollama)**
+- Select any portion of the Corrected text → *✏ Rewrite Selected Text* or `Ctrl+Shift+R`
+- Preview dialog shows Before / After side-by-side; text is editable before accepting
+- Safety system prompt enforced: model may only rewrite *style*, never add findings or infer pathology
+- All requests go to `localhost` only — no patient text leaves the computer
+
+**Other improvements**
+- Voice-command processor reads `config/voice_commands.json` (e.g. "new line", "finish case")
+- Terminology dictionary expanded to 55 entries
+- `config/config.yaml` updated with full LLM and privacy blocks
+- `.gitignore` updated to exclude `config/user_settings.json` (machine-local preferences)
+
+---
+
+### v0.2 — initial public release
+
+- Real-time faster-whisper transcription (CPU + CUDA auto-detect)
+- Pathology terminology correction dictionary
+- Ollama / Qwen selected-text rewrite with safety prompt
+- F9 hotkey toggle record
+- Auto-copy to clipboard
+- Portable offline build support
 
 ---
 
@@ -97,6 +154,78 @@ See [`README_OFFLINE_PORTABLE.md`](README_OFFLINE_PORTABLE.md) for the full depl
 
 ---
 
+## AI Rewrite Selected Text (Ollama)
+
+The **Rewrite Selected Text** feature lets you select any portion of your dictated text in the Corrected panel and ask a local Qwen model to rewrite it into cleaner formal pathology report style.
+
+**Privacy guarantee:** All requests go to `localhost` only. No text leaves the computer.
+
+### 1 — Install Ollama
+
+Download and install from **https://ollama.ai** (Windows / macOS / Linux).
+
+### 2 — Pull the Qwen model
+
+Open a terminal and run:
+
+```powershell
+ollama pull qwen2.5:14b
+```
+
+> This downloads ~8 GB. You only need to do this once.
+> Smaller/faster alternatives: `qwen2.5:7b` (~4 GB), `qwen2.5:3b` (~2 GB)
+
+### 3 — Start Ollama
+
+```powershell
+ollama serve
+```
+
+Leave this running in the background while using the app.
+
+### 4 — Configure the model (optional)
+
+Edit `config/config.yaml` to change the model name or endpoint:
+
+```yaml
+llm:
+  enabled: true
+  model: "qwen2.5:14b"          # change to any pulled model
+  endpoint: "http://localhost:11434/api/generate"
+  temperature: 0.1
+  timeout_seconds: 60
+```
+
+### 5 — Use Rewrite Selected Text
+
+1. Dictate and transcribe as normal
+2. Switch to the **✏ Corrected** tab
+3. **Select** the text you want to rewrite
+4. Click **✏ Rewrite Selected Text** (or press `Ctrl+Shift+R`)
+5. Wait for the preview dialog to appear (~5–30 s depending on model)
+6. Review the **Before / After** comparison
+7. Optionally edit the rewritten text in the right pane
+8. Click **✓ Accept Rewrite** to replace the selection, or **✗ Reject** to keep the original
+
+### Undo / Redo
+
+The Corrected panel supports full undo/redo:
+
+| Action | Keyboard | Button |
+|--------|----------|--------|
+| Undo   | `Ctrl+Z` | ↩ Undo |
+| Redo   | `Ctrl+Y` | ↪ Redo |
+
+### Safety rule
+
+The AI model is instructed with a strict system prompt:
+
+> *Rewrite the selected text into clearer formal pathology reporting style using only the facts explicitly present in the selected text. Do not add new findings. Do not infer diagnosis, tumor grade, margin status, stage, or biomarker status. Do not convert uncertain language into definite statements. Return only the rewritten text.*
+
+The model **never** has access to the full patient record — only the text you explicitly select.
+
+---
+
 ## Synchronizing Between Computers
 
 ### First time on a new computer
@@ -143,16 +272,22 @@ Dictation_path/
 |-- terminology_corrector.py    <- dictionary substitution
 |-- clipboard_handler.py        <- clipboard integration
 |-- hotkey_manager.py           <- F9 hotkey
+|-- rewriter.py                 <- GGUF-based whole-text rewriter (llama-cpp)
+|-- ollama_client.py            <- local Ollama HTTP client (stdlib only)
+|-- rewrite_service.py          <- pathology-safe selection rewrite via Ollama
 |-- pathology_dictation_app.py  <- CLI entry point
 |-- create_shortcut.py          <- desktop shortcut creator
 |-- launcher.pyw                <- silent launcher for shortcuts
 |
 |-- config/
-|   |-- config.yaml             <- portable runtime config
+|   |-- config.yaml             <- runtime config (model, LLM, privacy)
 |   `-- pathology_replacements.json  <- terminology dictionary
 |
 |-- data/
 |   `-- pathology_dictionary.json    <- terminology dictionary (JSON)
+|
+|-- models/
+|   `-- rewrite/                <- place .gguf files here for GGUF rewriter
 |
 |-- tools/
 |   |-- verify_offline_ready.py
@@ -167,13 +302,115 @@ Dictation_path/
 
 ---
 
+## Troubleshooting — Ollama & AI Rewrite
+
+### Ollama auto-start
+
+When the app launches, it automatically:
+1. Checks if Ollama is running at `http://localhost:11434`
+2. If not running, attempts to start it silently with `ollama serve`
+3. Waits up to 30 seconds for Ollama to become ready
+4. Checks whether the configured model is installed
+
+The footer bar shows the Ollama status at all times:
+
+| Footer message | Meaning |
+|----------------|---------|
+| `Ollama: checking…` | Startup check in progress |
+| `Ollama: qwen2.5:14b ✓` | Ready — rewrite is enabled |
+| `Ollama: 'qwen2.5:14b' not installed` | Ollama is running but model needs pulling |
+| `Ollama unavailable — rewrite disabled` | Could not start; dictation still works |
+
+**Dictation always works regardless of Ollama status.**
+The ✏ Rewrite Selected Text button is simply disabled when Ollama is unavailable.
+
+---
+
+### How to install Ollama
+
+Download and install from **https://ollama.ai** (Windows / macOS / Linux installer).
+
+After installation, Ollama is available as the `ollama` command in your terminal.
+
+---
+
+### How to manually start Ollama
+
+If auto-start fails, open a terminal and run:
+
+```powershell
+ollama serve
+```
+
+Leave this running in the background.  The app will detect it on next startup
+or when you click ✏ Rewrite Selected Text.
+
+---
+
+### How to install the Qwen model
+
+```powershell
+ollama pull qwen2.5:14b      # ~8 GB — default model
+```
+
+You only need to do this once.  Alternative sizes:
+
+```powershell
+ollama pull qwen2.5:3b       # ~2 GB — fastest, less accurate
+ollama pull qwen2.5:7b       # ~4 GB — good balance
+ollama pull qwen2.5:32b      # ~20 GB — best, requires GPU
+```
+
+To use a different model, edit `config/config.yaml`:
+
+```yaml
+llm:
+  model: "qwen2.5:7b"        # change to any pulled model
+```
+
+> **The app never pulls models automatically** — it must remain offline-safe.
+> The model must be pulled manually before the rewrite feature will work.
+
+---
+
+### What happens if Ollama is not installed
+
+The app starts normally.  The ✏ Rewrite Selected Text button stays disabled.
+The footer shows: `Ollama unavailable — rewrite disabled (dictation works normally)`
+
+If you later install Ollama, restart the app and it will be detected automatically.
+
+---
+
+### What happens if the Qwen model is not pulled
+
+The app starts normally.  A one-time warning dialog appears:
+
+> *"Ollama is running, but 'qwen2.5:14b' is not installed.
+> Pull it with: ollama pull qwen2.5:14b"*
+
+The ✏ Rewrite Selected Text button stays disabled until the model is installed.
+
+---
+
+### To disable auto-start entirely
+
+Set `auto_start_ollama: false` in `config/config.yaml`:
+
+```yaml
+llm:
+  auto_start_ollama: false    # never try to start Ollama automatically
+```
+
+---
+
 ## Safety Rule
 
 > **This app transcribes and corrects dictated text only.**
 > It never diagnoses, infers findings, or adds unstated pathology content.
 
-When AI style-rewriting is added in a future phase, the required instruction will be:
-> *"Rewrite into my reporting style using only dictated facts."*
+The AI rewrite feature enforces this rule at the prompt level:
+> *"Rewrite the selected text into clearer formal pathology reporting style using only the facts explicitly present in the selected text. Do not add new findings. Do not infer diagnosis. Return only the rewritten text."*
 
 ---
 

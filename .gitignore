@@ -28,9 +28,10 @@ models/
 *.gguf
 *.npz
 
-# ── Portable build output (7 GB — use releases instead) ──────────────────────
+# ── Portable build output (large — upload to Releases, do not commit) ────────
 PathDictate_Portable/
-*.zip
+PathDictate_v*_Portable/
+PathDictate_v*_Portable.zip
 *.tar.gz
 *.7z
 

@@ -30,8 +30,11 @@ from clipboard_handler import ClipboardHandler
 from rewriter import LocalRewriter, scan_models
 from ollama_client import OllamaClient, OllamaError, OllamaConnectionError
 from rewrite_service import RewriteService
+from dictation_cleanup import clean_self_corrections
+from rewrite_service import PathologyEnglishRewriteService
+from model_manager_dialog import ModelManagerDialog
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.3"
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 BG        = "#F4F6FB"
@@ -794,6 +797,9 @@ class App(tk.Tk):
                        command=self._open_editor)
         tm.add_command(label="  🎙  Voice Commands Editor…",
                        command=self._open_voice_editor)
+        tm.add_separator()
+        tm.add_command(label="  🤖  AI Model Manager…",
+                       command=self._open_model_manager)
         mb.add_cascade(label="Tools", menu=tm)
 
         # Settings
@@ -1280,6 +1286,16 @@ UNDO / REDO
             state="disabled")
         self._rewrite_sel_btn.pack(side="left")
 
+        tk.Frame(bar, bg=BORDER, width=1)\
+            .pack(side="left", fill="y", padx=(6, 6), pady=3)
+
+        self._patho_eng_btn = mk_btn(
+            bar, "🌐  Rewrite to Pathology English",
+            self._rewrite_to_pathology_english,
+            style="rewrite", size="small",
+            state="disabled")
+        self._patho_eng_btn.pack(side="left")
+
         tk.Label(bar,
                  text="✎ Corrected tab is editable — "
                       "click to place cursor, then dictate to insert there",
@@ -1326,6 +1342,14 @@ UNDO / REDO
         self._rewrite_sel_btn = tbtn(
             "✏  Rewrite Selected Text   Ctrl+Shift+R",
             self._rewrite_selected, fg=ACCENT,
+            state="disabled")   # enabled once Ollama startup check passes
+
+        tk.Frame(bar, bg=BORDER, width=1)\
+            .pack(side="left", fill="y", padx=(6, 6), pady=3)
+
+        self._patho_eng_btn = tbtn(
+            "🌐  Rewrite to Pathology English",
+            self._rewrite_to_pathology_english, fg=ACCENT,
             state="disabled")   # enabled once Ollama startup check passes
 
         # Right-side hint
@@ -1885,6 +1909,164 @@ UNDO / REDO
         finally:
             self._ui_q.put(("rewrite_sel_enable", None))
 
+    def _rewrite_to_pathology_english(self):
+        """Convert mixed Thai-English dictation to professional English pathology prose."""
+        # Get selected text or ask about full text
+        try:
+            sel = self._corr_box.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+        except tk.TclError:
+            sel = ""
+
+        if not sel:
+            full = self._corr_box.get("1.0", "end").strip()
+            if not full:
+                messagebox.showwarning(
+                    "Nothing to rewrite",
+                    "Type or dictate some text first.",
+                    parent=self)
+                return
+            ans = messagebox.askyesno(
+                "Rewrite entire draft?",
+                "No text is selected.\n\nRewrite the entire draft to Pathology English?",
+                parent=self)
+            if not ans:
+                return
+            text = full
+            use_selection = False
+        else:
+            text = sel
+            use_selection = True
+
+        # Check Ollama
+        if not self._ollama.is_ollama_running():
+            messagebox.showwarning(
+                "AI rewrite unavailable",
+                "Ollama is not running.\n\n"
+                "Start Ollama or use Tools → AI Model Manager.",
+                parent=self)
+            return
+
+        if not self._ollama.is_model_available():
+            messagebox.showwarning(
+                "Model not installed",
+                f"Qwen model '{self._ollama.model}' is not installed in Ollama.\n\n"
+                "Use Tools → AI Model Manager to download it.",
+                parent=self)
+            return
+
+        # Apply pre-processing
+        cleaned = clean_self_corrections(text)
+        try:
+            normalized = self._corrector.correct(cleaned)
+        except Exception:
+            normalized = cleaned
+
+        # Disable button and run in background
+        if hasattr(self, '_patho_eng_btn'):
+            self._patho_eng_btn.config(state="disabled")
+        self._set_status("Rewriting to Pathology English…", AMBER)
+
+        threading.Thread(
+            target=self._patho_english_bg,
+            args=(normalized, text, use_selection),
+            daemon=True
+        ).start()
+
+    def _patho_english_bg(self, normalized_text: str, original_text: str, use_selection: bool):
+        """Background worker for Rewrite to Pathology English."""
+        try:
+            svc = PathologyEnglishRewriteService(
+                self._ollama,
+                temperature=self.cfg.llm.temperature,
+                max_tokens=self.cfg.llm.max_tokens,
+            )
+            result = svc.rewrite_to_english(normalized_text)
+            self._ui_q.put(("patho_english_done", result, original_text, use_selection))
+            self._ui_q.put(("status", "Pathology English rewrite complete", GREEN_OK))
+        except Exception as e:
+            logger.error(f"_patho_english_bg: {e}", exc_info=True)
+            self._ui_q.put(("status", f"Rewrite error: {e}", RED_REC))
+            self._ui_q.put(("msgbox", "error", "Rewrite failed", str(e)))
+        finally:
+            if hasattr(self, '_patho_eng_btn'):
+                self._ui_q.put(("enable_btn", "_patho_eng_btn"))
+
+    def _show_patho_english_preview(self, result: str, original: str, use_selection: bool):
+        """Show accept/reject preview for Pathology English rewrite."""
+        dlg = tk.Toplevel(self)
+        dlg.title("Rewrite to Pathology English — Preview")
+        dlg.configure(bg=BG)
+        dlg.geometry("780x560")
+        dlg.minsize(600, 400)
+        dlg.transient(self)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="Rewrite to Pathology English",
+                 font=("Segoe UI", 13, "bold"), bg=BG, fg=ACCENT
+                 ).pack(anchor="w", padx=20, pady=(16, 4))
+        tk.Label(dlg,
+                 text="Review the rewrite below. Accept replaces your text. Reject leaves it unchanged.",
+                 font=("Segoe UI", 10), bg=BG, fg=TEXT_DIM
+                 ).pack(anchor="w", padx=20, pady=(0, 12))
+
+        # Split view
+        panes = tk.Frame(dlg, bg=BG)
+        panes.pack(fill="both", expand=True, padx=20)
+        panes.columnconfigure(0, weight=1)
+        panes.columnconfigure(1, weight=1)
+        panes.rowconfigure(1, weight=1)
+
+        tk.Label(panes, text="Original", font=("Segoe UI", 10, "bold"),
+                 bg=BG, fg=TEXT_DIM).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        tk.Label(panes, text="Rewritten (Pathology English)",
+                 font=("Segoe UI", 10, "bold"), bg=BG, fg=ACCENT
+                 ).grid(row=0, column=1, sticky="w")
+
+        orig_box = tk.Text(panes, font=("Segoe UI", 10), bg="#F8F8F8", fg=TEXT_DIM,
+                           wrap="word", relief="solid", bd=1, padx=8, pady=8)
+        orig_box.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        orig_box.insert("1.0", original)
+        orig_box.config(state="disabled")
+
+        res_box = tk.Text(panes, font=("Segoe UI", 10), bg=BG2, fg=TEXT,
+                          wrap="word", relief="solid", bd=1, padx=8, pady=8)
+        res_box.grid(row=1, column=1, sticky="nsew")
+        res_box.insert("1.0", result)
+
+        btns = tk.Frame(dlg, bg=BG)
+        btns.pack(fill="x", padx=20, pady=16)
+
+        def _accept():
+            final = res_box.get("1.0", "end-1c")
+            if use_selection:
+                try:
+                    self._corr_box.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                    self._corr_box.insert(tk.INSERT, final)
+                except tk.TclError:
+                    self._corr_box.delete("1.0", "end")
+                    self._corr_box.insert("1.0", final)
+            else:
+                self._corr_box.delete("1.0", "end")
+                self._corr_box.insert("1.0", final)
+            self._doc_dirty = True
+            dlg.destroy()
+            self._set_status("Pathology English rewrite accepted", GREEN_OK)
+
+        def _reject():
+            dlg.destroy()
+            self._set_status("Rewrite rejected — original unchanged", TEXT_DIM)
+
+        mk_btn(btns, "✓  Accept", _accept, style="save", size="normal").pack(
+            side="left", padx=(0, 8))
+        mk_btn(btns, "✗  Reject", _reject, style="danger", size="normal").pack(
+            side="left")
+        tk.Label(btns, text="You can also edit the rewritten text before accepting.",
+                 font=("Segoe UI", 9), bg=BG, fg=TEXT_DIM).pack(
+            side="right", padx=(0, 4))
+
+    def _open_model_manager(self):
+        ModelManagerDialog(self, self._ollama, self.cfg)
+
     # ── Font size ─────────────────────────────────────────────────────────────
 
     def _font_up(self):
@@ -2192,6 +2374,19 @@ UNDO / REDO
                 elif op == "rewrite_sel_enable":
                     self._rewrite_sel_btn.config(state="normal")
 
+                elif op == "patho_english_done":
+                    result, original_text, use_selection = m[1], m[2], m[3]
+                    self._show_patho_english_preview(result, original_text, use_selection)
+
+                elif op == "enable_btn":
+                    attr = m[1]
+                    btn_widget = getattr(self, attr, None)
+                    if btn_widget:
+                        try:
+                            btn_widget.config(state="normal")
+                        except Exception:
+                            pass
+
                 elif op == "ollama_foot":
                     _, text, color = m
                     self._foot.config(text=text, fg=color)
@@ -2200,12 +2395,16 @@ UNDO / REDO
                     _, state, detail = m
                     if state == "ready":
                         self._rewrite_sel_btn.config(state="normal")
+                        if hasattr(self, "_patho_eng_btn"):
+                            self._patho_eng_btn.config(state="normal")
                         if hasattr(self, "_rewrite_menu"):
                             self._rewrite_menu.entryconfig(0, state="normal")
                         self._foot.config(
                             text=f"Ollama: {detail}  ✓", fg=GREEN_OK)
                     elif state == "no_model":
                         self._rewrite_sel_btn.config(state="disabled")
+                        if hasattr(self, "_patho_eng_btn"):
+                            self._patho_eng_btn.config(state="disabled")
                         if hasattr(self, "_rewrite_menu"):
                             self._rewrite_menu.entryconfig(0, state="disabled")
                         self._foot.config(
@@ -2220,6 +2419,8 @@ UNDO / REDO
                             parent=self)
                     elif state == "unavailable":
                         self._rewrite_sel_btn.config(state="disabled")
+                        if hasattr(self, "_patho_eng_btn"):
+                            self._patho_eng_btn.config(state="disabled")
                         if hasattr(self, "_rewrite_menu"):
                             self._rewrite_menu.entryconfig(0, state="disabled")
                         self._foot.config(

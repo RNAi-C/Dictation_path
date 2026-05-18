@@ -1,104 +1,79 @@
-# Pathology Dictation Assistant — Portable Configuration
-# -------------------------------------------------------
-# This file is loaded automatically when PATHDICTATE_PORTABLE=1.
-# Paths beginning with "./" are relative to the portable root folder.
-# Edit this file to change model, hotkey, or audio settings.
+# PathDictate v0.2.3 Configuration
+# -------------------------------------------------
+# Paths starting with './' are relative to the portable folder root.
+# Edit this file to change app behaviour.
 
 offline_only: true
 disable_telemetry: true
 
-# ── Model ──────────────────────────────────────────────────────────────────────
-# model_path: path to a local model directory (flat format).
-#   Use faster-whisper-base  for fastest CPU performance (~140 MB).
-#   Use faster-whisper-small for better accuracy (~244 MB, still CPU-friendly).
-#   Use faster-whisper-medium for high accuracy (~769 MB, slow on CPU).
-#   Use faster-whisper-large-v3 for best quality (~1.5 GB, GPU strongly recommended).
-model_path: ./models/faster-whisper-base
+# Whisper model path (relative = portable, absolute = fixed machine)
+model_path: ./models/faster-whisper-small
 
-# ── Device auto-detection ─────────────────────────────────────────────────────
-# device: auto | cuda | cpu
-#   auto = try CUDA first; fall back to CPU silently.
+# Device: auto | cuda | cpu
 device: auto
-
-# Compute type used when no GPU is found.
 cpu_compute_type: int8
-
-# Compute type used when CUDA is available.
 cuda_compute_type: float16
-
-# Explicit fallback if device detection fails entirely.
 fallback_device: cpu
 fallback_compute_type: int8
 
-# ── FFmpeg ─────────────────────────────────────────────────────────────────────
-ffmpeg_path: ./ffmpeg/bin/ffmpeg.exe
-
-# ── Transcription quality ──────────────────────────────────────────────────────
+# Language settings
+# Thai with English medical terms: use "th" for primary language
+# Pure English: use "en"
 language: en
+whisper_language: en
+language_mode: thai_with_english_medical_terms
+enable_medical_dictionary: true
+preserve_english_medical_terms: true
+
+# Transcription quality
 temperature: 0.0
 beam_size: 5
 best_of: 5
+vad_filter: true
 
-# ── Hotkey ─────────────────────────────────────────────────────────────────────
+# Recording
 hotkey_toggle_record: f9
-
-# ── Audio input ────────────────────────────────────────────────────────────────
 sample_rate: 16000
 channels: 1
-# device_index: null   # null = system default microphone
 
-# ── Terminology correction ─────────────────────────────────────────────────────
+# Terminology dictionary
 dictionary_file: ./config/pathology_replacements.json
 terminology_enabled: true
 case_sensitive: false
 
-# ── UI ─────────────────────────────────────────────────────────────────────────
+# UI
 show_transcription_live: true
 auto_copy_to_clipboard: true
 
-# ── Local LLM (Ollama) — AI rewrite selected text ──────────────────────────────
-# Requires Ollama running locally.  No data leaves this computer.
-#
-# Setup:
-#   1. Install Ollama:  https://ollama.ai
-#   2. Pull model:      ollama pull qwen2.5:14b
-#   3. Start server:    ollama serve
-#   4. Restart this app
-#
-# Change 'model' to any pulled model, e.g.:
-#   qwen2.5:7b    (faster, ~4 GB)
-#   qwen2.5:14b   (default — good balance, ~8 GB)
-#   qwen2.5:32b   (best quality, ~20 GB, GPU recommended)
+# Documents / autosave
+documents:
+  default_draft_folder: ./drafts
+  autosave_enabled: true
+  autosave_interval_seconds: 60
+  autosave_folder: ./autosave
+  default_filename_prefix: PathDictate_Draft
+
+# Local AI rewrite (Ollama + Qwen)
 llm:
   enabled: true
   provider: ollama
-
-  # Base URL — the app derives /api/generate and /api/tags automatically.
   endpoint: "http://localhost:11434"
-
-  # Model to use for rewriting.  Must be pulled with  ollama pull <model>.
-  model: "qwen2.5:14b"
-
-  # Automatically try to start Ollama when the app launches.
-  # Set to false to disable auto-start (Ollama must be started manually).
+  model: "qwen2.5:7b"
+  recommended_model: "qwen2.5:7b"
+  advanced_model: "qwen2.5:14b"
   auto_start_ollama: true
-
-  # Shell command used to start Ollama (must be in PATH or full path).
   ollama_start_command: "ollama serve"
-
-  # How long to wait for Ollama to become ready after auto-start (seconds).
   startup_wait_seconds: 30
-
-  # How often to re-check during the wait period (seconds).
   startup_retry_interval_seconds: 2
-
-  # Generation parameters
   temperature: 0.1
-  max_tokens: 512
+  max_tokens: 1024
   timeout_seconds: 120
+  allow_model_download: true
+  download_requires_confirmation: true
 
-# ── Privacy ─────────────────────────────────────────────────────────────────────
+# Privacy
 privacy:
   offline_only: true
   log_transcripts_by_default: false
   log_llm_requests: false
+  log_audio_content: false

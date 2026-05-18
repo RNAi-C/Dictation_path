@@ -106,3 +106,61 @@ def _clean_response(text: str) -> str:
             r"^(note:|note\s*—|this\s+rewrite|i\s+have)", lines[-1], re.I):
         lines.pop()
     return "\n".join(lines).strip()
+
+
+# ── Pathology English system prompt ──────────────────────────────────────────
+
+_PATHO_ENGLISH_SYSTEM = (
+    "You are a pathology report drafting assistant.\n\n"
+    "Convert the provided mixed Thai-English pathology dictation into professional "
+    "English pathology report prose.\n\n"
+    "Use ONLY facts explicitly present in the input text.\n\n"
+    "STRICT RULES — follow ALL of these:\n"
+    "• Preserve all measurements, laterality, specimen site, negative findings, "
+    "and uncertainty exactly.\n"
+    "• Translate Thai connective words and descriptive phrases into English only "
+    "as needed.\n"
+    "• Preserve English pathology terminology and normalize capitalization.\n"
+    "• Do not add new findings.\n"
+    "• Do not infer diagnosis.\n"
+    "• Do not infer tumor type, grade, size, margin status, lymphovascular invasion, "
+    "biomarker status, stage, or treatment effect.\n"
+    "• Do not remove uncertainty.\n"
+    "• Do not convert suspicious, possible, suggestive, or cannot exclude into definite.\n"
+    "• Do not create a synoptic report.\n"
+    "• If the input contains ambiguous self-correction or unclear measurement, "
+    "mark the relevant phrase with [REVIEW] rather than guessing.\n"
+    "• Return ONLY the professional English pathology prose — no preamble, "
+    "no explanation."
+)
+
+_PATHO_ENGLISH_TEMPLATE = (
+    "Convert the following mixed Thai-English pathology dictation into "
+    "professional English pathology report prose:\n\n{text}"
+)
+
+
+class PathologyEnglishRewriteService:
+    """
+    Converts mixed Thai-English dictation into professional English
+    pathology report prose using a local Ollama model.
+    """
+
+    def __init__(self, client: OllamaClient, temperature: float = 0.1,
+                 max_tokens: int = 1024):
+        self.client      = client
+        self.temperature = temperature
+        self.max_tokens  = max_tokens
+
+    def rewrite_to_english(self, text: str) -> str:
+        text = text.strip()
+        if not text:
+            raise ValueError("Input text is empty.")
+        prompt = _PATHO_ENGLISH_TEMPLATE.format(text=text)
+        raw = self.client.generate(
+            system_prompt=_PATHO_ENGLISH_SYSTEM,
+            user_text=prompt,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        return _clean_response(raw)

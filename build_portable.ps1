@@ -40,7 +40,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # ── Constants ────────────────────────────────────────────────────────────────
-$Version    = "0.2.1"
+$Version    = "0.2.3"
 $PyVer      = "3.13.7"
 $OutName    = "PathDictate_v${Version}_Portable"
 $ScriptRoot = $PSScriptRoot
@@ -267,7 +267,8 @@ $AppFiles = @(
     "gui_app.py", "config.py", "audio_recorder.py", "transcriber.py",
     "terminology_corrector.py", "clipboard_handler.py",
     "rewrite_service.py", "ollama_client.py", "rewriter.py",
-    "hotkey_manager.py", "pathology_dictation_app.py"
+    "hotkey_manager.py", "pathology_dictation_app.py",
+    "dictation_cleanup.py", "model_manager_dialog.py"
 )
 foreach ($f in $AppFiles) {
     $src = Join-Path $ScriptRoot $f
@@ -400,13 +401,13 @@ Write-Step "Phase 8 - Creating START_PATHDICTATE.bat"
 $launcherLines = @(
     "@echo off",
     "setlocal EnableDelayedExpansion",
-    "title PathDictate v0.2.1",
+    "title PathDictate v0.2.3",
     "cd /d `"%~dp0`"",
     "",
     "if not exist `"runtime\pythonw.exe`" (",
     "    echo.",
     "    echo  ERROR: runtime\pythonw.exe not found.",
-    "    echo  Re-download PathDictate_v0.2.1_Portable.zip from GitHub Releases.",
+    "    echo  Re-download PathDictate_v0.2.3_Portable.zip from GitHub Releases.",
     "    pause",
     "    exit /b 1",
     ")",

@@ -1,0 +1,44 @@
+PathDictate v0.2.3
+==================
+Released: 2026-05-09
+Python:   3.13
+Model:    faster-whisper-small (default)
+
+v0.2.3 Features
+---------------
+  Local Whisper model folder selection
+  Mixed Thai-English dictation support (language: th)
+  Self-correction cleanup (clean_self_corrections)
+  Expanded pathology terminology dictionary
+  Editable text area with cursor insertion
+  Open / Save / Save As (.txt) draft workflow
+  Autosave every 60 seconds
+  Undo / Redo (Ctrl+Z / Ctrl+Y)
+  Selected-text Qwen rewrite via Ollama
+  Rewrite to Pathology English (Thai->English via Qwen)
+  AI Model Manager (Tools menu)
+  Physical/tactile button styling
+  Portable ZIP distribution (build_portable.ps1)
+
+System Requirements
+-------------------
+  Windows 10 or 11 (64-bit)
+  4 GB RAM minimum, 8 GB recommended
+  NVIDIA GPU optional (auto-detected)
+  Microphone required
+
+Privacy
+-------
+  Fully offline -- no cloud -- no telemetry
+  Audio is never saved permanently
+  Drafts remain local only
+  AI rewrite uses localhost only
+
+Limitations (v0.2.3)
+--------------------
+  .txt only (no .docx yet)
+  No gross template mode
+  No CAP protocol mode
+  No LIS integration
+  AI rewrite requires local Ollama + Qwen model
+  Whisper model must exist locally (no auto-download)

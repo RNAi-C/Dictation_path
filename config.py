@@ -27,10 +27,13 @@ class TranscriptionConfig:
                                     # OR an absolute/relative folder path to a local model
     device: str = "auto"           # Options: auto, cuda, cpu
     compute_type: str = "float16"  # Options: float32, float16, int8 (auto-overridden)
-    language: str = "en"
+    language: str = "en"           # "en" for English, "th" for Thai
     temperature: float = 0.0
     beam_size: int = 5
     best_of: int = 5
+    language_mode: str = "thai_with_english_medical_terms"
+    never_download_model: bool = True
+    allow_model_folder_selection: bool = True
 
 
 @dataclass
@@ -61,14 +64,18 @@ class LLMConfig:
     enabled:                        bool  = True
     provider:                       str   = "ollama"
     endpoint:                       str   = "http://localhost:11434"
-    model:                          str   = "qwen2.5:14b"
+    model:                          str   = "qwen2.5:7b"
+    recommended_model:              str   = "qwen2.5:7b"
+    advanced_model:                 str   = "qwen2.5:14b"
     temperature:                    float = 0.1
-    max_tokens:                     int   = 512
+    max_tokens:                     int   = 1024
     timeout_seconds:                int   = 120
     auto_start_ollama:              bool  = True
     ollama_start_command:           str   = "ollama serve"
     startup_wait_seconds:           int   = 30
     startup_retry_interval_seconds: int   = 2
+    allow_model_download:           bool  = True
+    download_requires_confirmation: bool  = True
 
 
 @dataclass
@@ -268,6 +275,8 @@ class PathologyDictationConfig:
                 self.llm.endpoint = ep
 
             self.llm.model           = str(  llm.get("model",           self.llm.model))
+            self.llm.recommended_model = str(llm.get("recommended_model", self.llm.recommended_model))
+            self.llm.advanced_model  = str(  llm.get("advanced_model",  self.llm.advanced_model))
             self.llm.temperature     = float(llm.get("temperature",     self.llm.temperature))
             self.llm.max_tokens      = int(  llm.get("max_tokens",      self.llm.max_tokens))
             self.llm.timeout_seconds = int(  llm.get("timeout_seconds", self.llm.timeout_seconds))
@@ -282,6 +291,13 @@ class PathologyDictationConfig:
             self.llm.startup_retry_interval_seconds = int(llm.get(
                 "startup_retry_interval_seconds",
                 self.llm.startup_retry_interval_seconds))
+
+            # Download settings
+            self.llm.allow_model_download = bool(llm.get(
+                "allow_model_download", self.llm.allow_model_download))
+            self.llm.download_requires_confirmation = bool(llm.get(
+                "download_requires_confirmation",
+                self.llm.download_requires_confirmation))
 
         except Exception as exc:
             print(f"[config] Warning: could not load LLM config: {exc}")
@@ -320,10 +336,13 @@ class PathologyDictationConfig:
                 self.transcription.compute_type = y.get("cpu_compute_type", "int8")
                 self.transcription.device = "cpu"
 
-            self.transcription.language    = y.get("language", "en")
+            self.transcription.language    = y.get("whisper_language",
+                                              y.get("language", "en"))
             self.transcription.temperature = float(y.get("temperature", 0.0))
             self.transcription.beam_size   = int(y.get("beam_size", 5))
             self.transcription.best_of     = int(y.get("best_of", 5))
+            if "language_mode" in y:
+                self.transcription.language_mode = str(y["language_mode"])
 
             self.hotkey.toggle_record = y.get("hotkey_toggle_record", "f9")
 

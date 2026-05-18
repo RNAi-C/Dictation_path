@@ -28,6 +28,27 @@ class PathologyTranscriber:
             f"device={config.device}, compute_type={config.compute_type}"
         )
 
+    @staticmethod
+    def validate_model_path(path: str) -> bool:
+        """
+        Check that *path* looks like a valid faster-whisper model directory.
+        A valid directory contains at least model.bin (or model.bin-like files)
+        or config.json.
+        Returns True if the path appears valid, False otherwise.
+        """
+        p = Path(path)
+        if not p.is_dir():
+            return False
+        required_indicators = ["config.json", "tokenizer.json", "model.bin"]
+        # Accept if any of the indicators are present
+        for indicator in required_indicators:
+            if (p / indicator).exists():
+                return True
+        # Also accept if there are any .bin files (CTranslate2 sharded models)
+        if any(p.glob("*.bin")):
+            return True
+        return False
+
     def _load_model(self) -> None:
         """Load the Whisper model. Downloads if not cached."""
         import os
@@ -69,7 +90,11 @@ class PathologyTranscriber:
             logger.info(f"Model loaded successfully")
 
         except Exception as e:
-            logger.error(f"Failed to load Whisper model: {e}")
+            logger.error(
+                f"Failed to load Whisper model from path '{model_path}': {e}\n"
+                f"  Ensure the model folder exists and contains config.json / model.bin.\n"
+                f"  Use Settings → Browse Model Folder to select a valid model directory."
+            )
             raise
 
     def transcribe(self, audio_data: np.ndarray, sample_rate: int = 16000) -> str:

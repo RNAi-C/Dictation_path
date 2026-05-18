@@ -1,13 +1,13 @@
 @echo off
 :: =============================================================================
-:: PathDictate v0.2.1 Portable — Launcher
+:: PathDictate v0.2.3 Portable — Launcher
 :: =============================================================================
 :: Double-click this file to start PathDictate.
 :: No Python installation required.  No command line needed.
 :: =============================================================================
 
 setlocal EnableDelayedExpansion
-title PathDictate v0.2.1
+title PathDictate v0.2.3
 
 cd /d "%~dp0"
 
@@ -21,7 +21,7 @@ if not exist "runtime\pythonw.exe" (
     echo.
     echo  This portable package appears to be incomplete or corrupted.
     echo.
-    echo  Please re-download PathDictate_v0.2.1_Portable.zip from:
+    echo  Please re-download PathDictate_v0.2.3_Portable.zip from:
     echo    https://github.com/RNAi-C/Dictation_path/releases
     echo.
     echo  Then extract the ZIP and try again.

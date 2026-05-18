@@ -100,3 +100,4 @@ checksums/
 
 # ── Claude Code settings (local only) ────────────────────────────────────────
 .claude/
+RELEASE_NOTES_*.md

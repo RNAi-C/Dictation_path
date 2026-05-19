@@ -3,6 +3,9 @@
 # PRIVACY-FIRST: never commit patient data, audio, models, or secrets
 # =============================================================================
 
+# ── Autosave drafts (patient data — never commit) ────────────────────────────
+autosave/
+
 # ── Virtual environments ──────────────────────────────────────────────────────
 venv/
 .venv/

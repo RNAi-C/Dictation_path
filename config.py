@@ -176,6 +176,10 @@ class PathologyDictationConfig:
                 self.documents.autosave_enabled = bool(s["autosave_enabled"])
             if "auto_copy_to_clipboard" in s:
                 self.ui.auto_copy_to_clipboard = bool(s["auto_copy_to_clipboard"])
+            if "auto_start_ollama" in s:
+                self.llm.auto_start_ollama = bool(s["auto_start_ollama"])
+            if "llm_model" in s:
+                self.llm.model = str(s["llm_model"])
             if "privacy_save_warned" in s:
                 # kept as a plain bool on the config object so gui_app can read it
                 self._privacy_save_warned = bool(s["privacy_save_warned"])
@@ -193,6 +197,8 @@ class PathologyDictationConfig:
                 "last_draft_folder":           self.documents.last_draft_folder,
                 "autosave_enabled":            self.documents.autosave_enabled,
                 "auto_copy_to_clipboard":      self.ui.auto_copy_to_clipboard,
+                "auto_start_ollama":           self.llm.auto_start_ollama,
+                "llm_model":                   self.llm.model,
                 "privacy_save_warned":         getattr(
                     self, "_privacy_save_warned", False),
             }

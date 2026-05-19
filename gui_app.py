@@ -689,7 +689,14 @@ class App(tk.Tk):
         # GGUF rewriter (legacy, lazy)
         self._rewriter: Optional[LocalRewriter] = None
 
-        # Ollama rewrite service
+        # Ollama client + rewrite service
+        # self._ollama is always set (even if Ollama is offline) so that
+        # ModelManagerDialog and _rewrite_to_pathology_english can call it safely.
+        self._ollama: OllamaClient = OllamaClient(
+            endpoint=self.cfg.llm.endpoint,
+            model=self.cfg.llm.model,
+            timeout=self.cfg.llm.timeout_seconds,
+        )
         self._rewrite_svc: Optional[RewriteService] = None
         self._init_ollama()
 
@@ -797,6 +804,11 @@ class App(tk.Tk):
                        command=self._open_editor)
         tm.add_command(label="  🎙  Voice Commands Editor…",
                        command=self._open_voice_editor)
+        tm.add_separator()
+        tm.add_command(label="  💾  Export Personal Settings…",
+                       command=self._export_personal_settings)
+        tm.add_command(label="  📂  Import Personal Settings…",
+                       command=self._import_personal_settings)
         tm.add_separator()
         tm.add_command(label="  🤖  AI Model Manager…",
                        command=self._open_model_manager)
@@ -1804,6 +1816,7 @@ UNDO / REDO
                 endpoint=cfg.endpoint,
                 model=cfg.model,
                 timeout=cfg.timeout_seconds)
+            self._ollama = client          # keep shared reference up to date
             self._rewrite_svc = RewriteService(
                 client=client,
                 temperature=cfg.temperature,
@@ -1948,9 +1961,11 @@ UNDO / REDO
 
         if not self._ollama.is_model_available():
             messagebox.showwarning(
-                "Model not installed",
-                f"Qwen model '{self._ollama.model}' is not installed in Ollama.\n\n"
-                "Use Tools → AI Model Manager to download it.",
+                "No AI model installed",
+                f"Model '{self._ollama.model}' is not yet downloaded.\n\n"
+                "Go to  Tools → AI Model Manager  and click Download\n"
+                "to install a model (e.g. qwen2.5:7b).\n\n"
+                "Dictation and terminology correction work without it.",
                 parent=self)
             return
 
@@ -2066,6 +2081,155 @@ UNDO / REDO
 
     def _open_model_manager(self):
         ModelManagerDialog(self, self._ollama, self.cfg)
+
+    # ── Personal Settings export / import ─────────────────────────────────────
+
+    def _export_personal_settings(self):
+        """Save terminology + voice commands to a single portable JSON file."""
+        # --- collect terminology ---
+        terminology: dict = {}
+        if self._corrector:
+            terminology = dict(self._corrector.replacements)
+        else:
+            # fallback: read from disk
+            try:
+                with open(self.cfg.dictionary_path, encoding="utf-8") as fh:
+                    terminology = json.load(fh)
+            except Exception:
+                pass
+
+        # --- collect voice commands (serialise \n back to \\n for JSON) ---
+        vc_serialised: dict = {}
+        for k, v in self._voice_cmd.commands.items():
+            vc_serialised[k] = v.replace("\n", "\\n")
+
+        payload = {
+            "pathdictate_version": APP_VERSION,
+            "exported": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "terminology": terminology,
+            "voice_commands": vc_serialised,
+        }
+
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export Personal Settings",
+            defaultextension=".json",
+            filetypes=[("PathDictate Settings", "*.json"), ("All files", "*.*")],
+            initialfile="PathDictate_Personal_Settings.json",
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+            n_terms = len(terminology)
+            n_cmds  = len(vc_serialised)
+            self._set_status(
+                f"Personal settings exported  ·  {n_terms} terms, {n_cmds} voice commands",
+                GREEN_OK)
+        except Exception as exc:
+            messagebox.showerror(
+                "Export Failed",
+                f"Could not write settings file:\n{exc}",
+                parent=self)
+
+    def _import_personal_settings(self):
+        """Load terminology + voice commands from a previously exported JSON file."""
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Import Personal Settings",
+            filetypes=[("PathDictate Settings", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception as exc:
+            messagebox.showerror(
+                "Import Failed",
+                f"Could not read settings file:\n{exc}",
+                parent=self)
+            return
+
+        # Validate basic structure
+        if not isinstance(data, dict):
+            messagebox.showerror(
+                "Import Failed",
+                "File does not appear to be a valid PathDictate settings file.",
+                parent=self)
+            return
+
+        imported_terms = data.get("terminology", {})
+        imported_cmds  = data.get("voice_commands", {})
+
+        if not isinstance(imported_terms, dict) or not isinstance(imported_cmds, dict):
+            messagebox.showerror(
+                "Import Failed",
+                "Settings file is malformed (terminology or voice_commands is not a dict).",
+                parent=self)
+            return
+
+        # Confirm merge vs replace
+        existing_term_count = len(self._corrector.replacements) if self._corrector else 0
+        existing_cmd_count  = len(self._voice_cmd.commands)
+        answer = messagebox.askyesnocancel(
+            "Import Personal Settings",
+            f"Found {len(imported_terms)} terminology entries and "
+            f"{len(imported_cmds)} voice commands.\n\n"
+            f"You currently have {existing_term_count} terminology entries "
+            f"and {existing_cmd_count} voice commands.\n\n"
+            "Yes  → Merge (add new entries, overwrite conflicts)\n"
+            "No   → Replace (discard current settings entirely)\n"
+            "Cancel → Abort",
+            parent=self,
+        )
+        if answer is None:   # Cancel
+            return
+
+        # ── Apply terminology ──────────────────────────────────────────────────
+        if self._corrector:
+            if not answer:  # No = Replace
+                self._corrector.replacements = {}
+            self._corrector.replacements.update(imported_terms)
+            self._corrector.save_dictionary()
+            # Reload from disk so the corrector is fully in-sync
+            self._corrector._load_dictionary()
+        else:
+            # No corrector yet — write directly to the dictionary file
+            base: dict = {}
+            if answer and self.cfg.dictionary_path.exists():  # merge
+                try:
+                    with open(self.cfg.dictionary_path, encoding="utf-8") as fh:
+                        base = json.load(fh)
+                except Exception:
+                    base = {}
+            base.update(imported_terms)
+            self.cfg.dictionary_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.cfg.dictionary_path, "w", encoding="utf-8") as fh:
+                json.dump(base, fh, indent=2, ensure_ascii=False)
+
+        # ── Apply voice commands ───────────────────────────────────────────────
+        if not answer:  # Replace: reset to defaults first
+            self._voice_cmd.commands = dict(VoiceCommandProcessor.DEFAULT_COMMANDS)
+
+        # Deserialise \\n → \n
+        decoded_cmds = {k: v.replace("\\n", "\n") for k, v in imported_cmds.items()}
+        self._voice_cmd.commands.update(decoded_cmds)
+        # Recompile pattern
+        self._voice_cmd._pattern = self._voice_cmd._compile()
+        # Persist to voice_commands.json
+        if self._voice_cmd.config_path:
+            self._voice_cmd.save(self._voice_cmd.config_path)
+
+        n_terms = len(self._corrector.replacements) if self._corrector else len(imported_terms)
+        n_cmds  = len(self._voice_cmd.commands)
+        verb    = "merged into" if answer else "replaced"
+        self._set_status(
+            f"Personal settings {verb} active  ·  {n_terms} terms, {n_cmds} voice commands",
+            GREEN_OK)
 
     # ── Font size ─────────────────────────────────────────────────────────────
 
@@ -2408,15 +2572,9 @@ UNDO / REDO
                         if hasattr(self, "_rewrite_menu"):
                             self._rewrite_menu.entryconfig(0, state="disabled")
                         self._foot.config(
-                            text=f"Ollama: '{detail}' not installed  —  "
-                                 f"run: ollama pull {detail}",
+                            text=f"AI model '{detail}' not installed  —  "
+                                 f"Tools → AI Model Manager to download",
                             fg=AMBER)
-                        messagebox.showwarning(
-                            "Qwen model not installed",
-                            f"Ollama is running but '{detail}' is not installed.\n\n"
-                            f"Pull it with:\n  ollama pull {detail}\n\n"
-                            "Dictation works normally.",
-                            parent=self)
                     elif state == "unavailable":
                         self._rewrite_sel_btn.config(state="disabled")
                         if hasattr(self, "_patho_eng_btn"):
